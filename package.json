@@ -1,0 +1,18 @@
+{
+  "name": "jmart-pos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "J-Mart employee welfare POS with Express and SQLite",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
