@@ -5,7 +5,11 @@ const ui = {
   posCategory: "all",
   productFilters: { search: "", category: "all", stock: "none", alert: "all" },
   productPage: 1,
-  reportMonth: new Date().toISOString().slice(0, 7)
+  reportMonth: new Date().toISOString().slice(0, 7),
+  reportMember: "all",
+  reportStatus: "all",
+  exportStart: new Date().toISOString().slice(0, 7) + "-01",
+  exportEnd: new Date().toISOString().slice(0, 10)
 };
 
 const state = {
@@ -19,6 +23,7 @@ const state = {
 };
 
 let cart = [];
+let productSearchTimer = null;
 
 const app = document.getElementById("app");
 const baht = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" });
@@ -73,8 +78,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function escapeCsv(value) {
+  const text = String(value ?? "");
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
 function categoryName(id) {
   return state.categories.find((category) => category.id === id)?.name || "-";
+}
+
+function actionIcon(action, id, icon, label, variant = "") {
+  return `<button class="icon-action ${variant}" type="button" data-action="${action}" data-id="${id}" title="${label}" aria-label="${label}">${icon}</button>`;
 }
 
 function stockStatus(product) {
@@ -157,7 +171,7 @@ async function login(event) {
     });
     state.token = result.token;
     localStorage.setItem(TOKEN_KEY, result.token);
-    ui.activeTab = result.user.role === "admin" ? "products" : "pos";
+    ui.activeTab = result.user.role === "admin" ? "dashboard" : "pos";
     await loadData();
     render();
   } catch (error) {
@@ -167,6 +181,7 @@ async function login(event) {
 
 function renderApp() {
   const tabs = [
+    { id: "dashboard", label: "Dashboard", adminOnly: true },
     { id: "products", label: "Products", adminOnly: true },
     { id: "purchases", label: "Purchases", adminOnly: true },
     { id: "salesReport", label: "Sales Report", adminOnly: true },
@@ -221,6 +236,7 @@ function logout(shouldRender = true) {
 }
 
 function renderTab() {
+  if (ui.activeTab === "dashboard") return renderDashboard();
   if (ui.activeTab === "products") return renderProducts();
   if (ui.activeTab === "purchases") return renderPurchases();
   if (ui.activeTab === "salesReport") return renderSalesReport();
@@ -232,6 +248,7 @@ function renderTab() {
 }
 
 function bindTabEvents() {
+  if (ui.activeTab === "dashboard") bindDashboard();
   if (ui.activeTab === "products") bindProducts();
   if (ui.activeTab === "purchases") bindPurchases();
   if (ui.activeTab === "salesReport" || ui.activeTab === "purchaseReport") bindReports();
@@ -239,6 +256,45 @@ function bindTabEvents() {
   if (ui.activeTab === "members") bindMembers();
   if (ui.activeTab === "pos") bindPos();
   if (ui.activeTab === "purchaseHistory") bindPurchaseHistory();
+}
+
+function renderDashboard() {
+  const sales = activeDocuments(byMonth(state.sales, ui.reportMonth));
+  const purchases = activeDocuments(byMonth(state.purchases, ui.reportMonth));
+  const daily = summarizeSalesByDate(sales);
+  const salesAmount = sales.reduce((sum, sale) => sum + sale.total, 0);
+  const salesCost = sales.reduce((sum, sale) => sum + (sale.totalCost || 0), 0);
+  const profit = sales.reduce((sum, sale) => sum + (sale.profit || sale.total - (sale.totalCost || 0)), 0);
+  const purchaseAmount = purchases.reduce((sum, purchase) => sum + purchase.totalCost, 0);
+  return `
+    <section>
+      <div class="section-head">
+        <div><h2>Dashboard</h2><p>Monthly sales, cost, and profit overview.</p></div>
+        <label class="field" style="max-width:220px">Month<input id="dashboardMonth" type="month" value="${ui.reportMonth}" /></label>
+      </div>
+      <div class="summary-grid">
+        <div class="metric"><span>Sales amount</span><strong>${baht.format(salesAmount)}</strong></div>
+        <div class="metric"><span>Cost of goods sold</span><strong>${baht.format(salesCost)}</strong></div>
+        <div class="metric"><span>Gross profit</span><strong>${baht.format(profit)}</strong></div>
+        <div class="metric"><span>Purchases</span><strong>${baht.format(purchaseAmount)}</strong></div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3>Dairy Summary</h3>
+        <div class="list" style="margin-top:12px">
+          <table>
+            <thead><tr><th>Date</th><th>Quantity</th><th>Sales</th><th>Cost</th><th>Profit</th></tr></thead>
+            <tbody>${daily.map((item) => `<tr><td>${item.date}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.amount)}</td><td>${baht.format(item.cost)}</td><td>${baht.format(item.profit)}</td></tr>`).join("") || `<tr><td colspan="5"><div class="empty">No data yet</div></td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+    </section>`;
+}
+
+function bindDashboard() {
+  document.getElementById("dashboardMonth").addEventListener("change", (event) => {
+    ui.reportMonth = event.target.value;
+    render();
+  });
 }
 
 function renderProducts() {
@@ -256,14 +312,14 @@ function renderProducts() {
         </div>
       </div>
       <div class="panel">
-        <div class="toolbar">
+        <div class="toolbar product-toolbar">
           <label class="field">Search<input id="productSearch" value="${escapeHtml(ui.productFilters.search)}" placeholder="Code or product name" /></label>
           <label class="field">Category${categorySelect("productCategory", ui.productFilters.category, true)}</label>
-          <label class="field">Stock sort<select id="stockSort"><option value="none">No sorting</option><option value="desc" ${ui.productFilters.stock === "desc" ? "selected" : ""}>High to low</option><option value="asc" ${ui.productFilters.stock === "asc" ? "selected" : ""}>Low to high</option></select></label>
+          <label class="field">Sort by<select id="stockSort"><option value="none">No sorting</option><option value="fav" ${ui.productFilters.stock === "fav" ? "selected" : ""}>Favourite first</option><option value="desc" ${ui.productFilters.stock === "desc" ? "selected" : ""}>Stock high to low</option><option value="asc" ${ui.productFilters.stock === "asc" ? "selected" : ""}>Stock low to high</option></select></label>
           <label class="field">Status<select id="alertFilter"><option value="all">All</option><option value="low" ${ui.productFilters.alert === "low" ? "selected" : ""}>Low stock</option><option value="out" ${ui.productFilters.alert === "out" ? "selected" : ""}>Out of stock</option></select></label>
         </div>
         <div class="list">
-          <table>
+          <table class="product-table">
             <thead><tr><th>Image</th><th>Code</th><th>Category</th><th>Product</th><th>Unit</th><th>Cost</th><th>Price</th><th>Stock</th><th>Min</th><th>Status</th><th>Fav</th><th></th></tr></thead>
             <tbody>${pageProducts.map(productRow).join("") || `<tr><td colspan="12"><div class="empty">No products found</div></td></tr>`}</tbody>
           </table>
@@ -294,8 +350,8 @@ function productRow(product) {
       <td>${number.format(product.stock)}</td>
       <td>${number.format(product.minStock)}</td>
       <td><span class="status ${status.className}">${status.label}</span></td>
-      <td><button class="icon-btn" title="Favourite" data-action="toggle-fav" data-id="${product.id}">${product.favourite ? "★" : "☆"}</button></td>
-      <td class="inline-actions"><button class="btn" data-action="edit-product" data-id="${product.id}">Edit</button><button class="btn danger" data-action="delete-product" data-id="${product.id}">Delete</button></td>
+      <td><button class="icon-action" title="Favourite" aria-label="Favourite" data-action="toggle-fav" data-id="${product.id}">${product.favourite ? "★" : "☆"}</button></td>
+      <td class="inline-actions action-cell">${actionIcon("edit-product", product.id, "✎", "Edit product")}${actionIcon("delete-product", product.id, "×", "Delete product", "danger")}</td>
     </tr>`;
 }
 
@@ -309,6 +365,7 @@ function filteredProducts() {
   if (filters.category !== "all") products = products.filter((product) => product.categoryId === filters.category);
   if (filters.alert === "low") products = products.filter((product) => product.stock > 0 && product.stock <= product.minStock);
   if (filters.alert === "out") products = products.filter((product) => product.stock <= 0);
+  if (filters.stock === "fav") products.sort((a, b) => Number(b.favourite) - Number(a.favourite) || a.name.localeCompare(b.name));
   if (filters.stock === "desc") products.sort((a, b) => b.stock - a.stock);
   if (filters.stock === "asc") products.sort((a, b) => a.stock - b.stock);
   return products;
@@ -325,7 +382,15 @@ function bindProducts() {
   document.getElementById("productSearch").addEventListener("input", (event) => {
     ui.productFilters.search = event.target.value;
     ui.productPage = 1;
-    render();
+    clearTimeout(productSearchTimer);
+    productSearchTimer = setTimeout(() => {
+      render();
+      const searchInput = document.getElementById("productSearch");
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+      }
+    }, 250);
   });
   document.getElementById("productCategory").addEventListener("change", (event) => {
     ui.productFilters.category = event.target.value;
@@ -395,7 +460,7 @@ function openProductModal(id, scannedCode = "") {
       <label class="field">Category${categorySelect("modalCategory", product.categoryId)}</label>
       <label class="field">Product name<input name="name" value="${escapeHtml(product.name)}" required /></label>
       <label class="field">Unit<input name="unit" value="${escapeHtml(product.unit)}" required /></label>
-      <label class="field">Cost<input name="cost" type="number" min="0" step="0.01" value="${product.cost}" /></label>
+      ${isEditing ? `<label class="field">Cost<input value="${baht.format(product.cost)}" disabled /></label>` : `<label class="field">Cost<input name="cost" type="number" min="0" step="0.01" value="${product.cost}" /></label>`}
       <label class="field">Sale price<input name="price" type="number" min="0" step="0.01" value="${product.price}" /></label>
       ${isEditing ? `<label class="field">Current stock<input value="${product.stock}" disabled /></label>` : `<label class="field">Initial stock<input name="stock" type="number" min="0" step="1" value="${product.stock}" /></label>`}
       <label class="field">Minimum stock<input name="minStock" type="number" min="0" step="1" value="${product.minStock}" /></label>
@@ -419,7 +484,7 @@ function openProductModal(id, scannedCode = "") {
         categoryId: document.getElementById("modalCategory").value,
         name: form.get("name").trim(),
         unit: form.get("unit").trim(),
-        cost: Number(form.get("cost") || 0),
+        cost: id ? product.cost : Number(form.get("cost") || 0),
         price: Number(form.get("price") || 0),
         stock: id ? product.stock : Number(form.get("stock") || 0),
         minStock: Number(form.get("minStock") || 0),
@@ -477,11 +542,12 @@ async function scanProductCode() {
 
 function openPurchaseModal() {
   const today = new Date().toISOString().slice(0, 10);
+  const emptyPurchaseItem = () => ({ productId: "", qty: "", cost: "" });
   const draft = {
     docNo: "",
     date: today,
     details: "",
-    items: [{ productId: state.products[0]?.id || "", qty: 1, cost: state.products[0]?.cost || 0 }]
+    items: [emptyPurchaseItem()]
   };
   openModal(`
     <h3>Create Purchase</h3>
@@ -499,6 +565,7 @@ function openPurchaseModal() {
             <thead><tr><th>Product</th><th>Qty</th><th>Unit Cost</th><th>Line Total</th><th></th></tr></thead>
             <tbody id="purchaseItemsBody"></tbody>
           </table>
+          <datalist id="purchaseProductOptions"></datalist>
         </div>
       </div>
       <div class="summary-grid field full" style="margin-top:4px">
@@ -507,7 +574,7 @@ function openPurchaseModal() {
       </div>
       <div class="modal-actions field full"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Save Purchase</button></div>
     </form>
-  `);
+  `, "modal-wide purchase-modal");
 
   const body = document.getElementById("purchaseItemsBody");
   const docNoInput = document.getElementById("purchaseDocNo");
@@ -515,15 +582,51 @@ function openPurchaseModal() {
   const detailsInput = document.getElementById("purchaseDetails");
   const totalQtyEl = document.getElementById("purchaseTotalQty");
   const grandTotalEl = document.getElementById("purchaseGrandTotal");
+  const productOptionsEl = document.getElementById("purchaseProductOptions");
 
   function lineTotal(item) {
     return Number(item.qty || 0) * Number(item.cost || 0);
   }
 
-  function productOptions(selectedId) {
+  function productLabel(product) {
+    return product ? `${product.name} (${product.code})` : "";
+  }
+
+  function purchaseProductOptions() {
     return state.products
-      .map((product) => `<option value="${product.id}" ${selectedId === product.id ? "selected" : ""}>${escapeHtml(product.name)} (${escapeHtml(product.code)})</option>`)
+      .map((product) => `<option value="${escapeHtml(productLabel(product))}" label="${escapeHtml(product.code)}"></option>`)
       .join("");
+  }
+
+  function findPurchaseProduct(value) {
+    const query = String(value || "").trim().toLowerCase();
+    if (!query) return null;
+    const exact = state.products.find((product) =>
+      productLabel(product).toLowerCase() === query ||
+      product.code.toLowerCase() === query ||
+      product.name.toLowerCase() === query
+    );
+    if (exact) return exact;
+    const matches = state.products.filter((product) =>
+      product.code.toLowerCase().includes(query) ||
+      product.name.toLowerCase().includes(query)
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function updatePurchaseRow(index, updateCostInput = false) {
+    const item = draft.items[index];
+    const row = body.querySelector(`[data-purchase-row="${index}"]`);
+    if (!row) return;
+    if (updateCostInput) row.querySelector('[data-purchase-field="cost"]').value = item.cost;
+    row.querySelector("[data-purchase-product-meta]").textContent = purchaseProductMeta(item.productId);
+    row.querySelector("[data-purchase-line-total]").textContent = baht.format(lineTotal(item));
+  }
+
+  function purchaseProductMeta(productId) {
+    const product = state.products.find((entry) => entry.id === productId);
+    if (!product) return "Type product name or code, then choose from suggestions.";
+    return `${product.code} • ${categoryName(product.categoryId)} • Current stock ${number.format(product.stock)} ${product.unit}`;
   }
 
   function syncSummary() {
@@ -534,31 +637,39 @@ function openPurchaseModal() {
   }
 
   function renderRows() {
+    productOptionsEl.innerHTML = purchaseProductOptions();
     body.innerHTML = draft.items
       .map(
         (item, index) => `
-          <tr>
-            <td><select data-purchase-field="productId" data-index="${index}">${productOptions(item.productId)}</select></td>
-            <td><input data-purchase-field="qty" data-index="${index}" type="number" min="1" step="1" value="${item.qty}" /></td>
-            <td><input data-purchase-field="cost" data-index="${index}" type="number" min="0" step="0.01" value="${item.cost}" /></td>
-            <td>${baht.format(lineTotal(item))}</td>
-            <td><button class="btn danger" type="button" data-purchase-remove="${index}" ${draft.items.length === 1 ? "disabled" : ""}>Remove</button></td>
+          <tr data-purchase-row="${index}">
+            <td>
+              <div class="purchase-product-picker">
+                <input data-purchase-field="productSearch" data-index="${index}" list="purchaseProductOptions" value="${escapeHtml(productLabel(state.products.find((product) => product.id === item.productId)))}" placeholder="Search product name or code" />
+                <small data-purchase-product-meta>${escapeHtml(purchaseProductMeta(item.productId))}</small>
+              </div>
+            </td>
+            <td><input data-purchase-field="qty" data-index="${index}" type="number" min="1" step="1" value="${item.qty}" placeholder="Qty" /></td>
+            <td><input data-purchase-field="cost" data-index="${index}" type="number" min="0" step="0.01" value="${item.cost}" placeholder="Unit cost" /></td>
+            <td data-purchase-line-total>${baht.format(lineTotal(item))}</td>
+            <td class="row-action-cell"><button class="icon-action danger" type="button" data-purchase-remove="${index}" title="Remove item" aria-label="Remove item" ${draft.items.length === 1 ? "disabled" : ""}>×</button></td>
           </tr>`
       )
       .join("");
-
     body.querySelectorAll("[data-purchase-field]").forEach((element) =>
       element.addEventListener("input", (event) => {
         const index = Number(event.target.dataset.index);
         const field = event.target.dataset.purchaseField;
-        if (field === "productId") {
-          draft.items[index].productId = event.target.value;
-          const product = state.products.find((entry) => entry.id === event.target.value);
-          if (product) draft.items[index].cost = product.cost;
+        if (field === "productSearch") {
+          const product = findPurchaseProduct(event.target.value);
+          if (product) {
+            draft.items[index].productId = product.id;
+            draft.items[index].cost = product.cost;
+            updatePurchaseRow(index, true);
+          }
         } else {
           draft.items[index][field] = Number(event.target.value || 0);
+          updatePurchaseRow(index);
         }
-        renderRows();
         syncSummary();
       })
     );
@@ -573,8 +684,7 @@ function openPurchaseModal() {
   }
 
   document.getElementById("addPurchaseRow").addEventListener("click", () => {
-    const product = state.products[0];
-    draft.items.push({ productId: product?.id || "", qty: 1, cost: product?.cost || 0 });
+    draft.items.push(emptyPurchaseItem());
     renderRows();
     syncSummary();
   });
@@ -592,7 +702,7 @@ function openPurchaseModal() {
           cost: Number(item.cost || 0)
         }))
         .filter((item) => item.productId && item.qty > 0);
-      if (!items.length) return alert("Please enter at least one purchase quantity.");
+      if (!items.length) return alert("Please select at least one product and enter its quantity.");
       await api("/api/purchases", {
         method: "POST",
         body: JSON.stringify({
@@ -638,7 +748,7 @@ function renderPurchases() {
 
 function purchaseHistoryAdminRow(purchase) {
   const cancelMeta = purchase.cancelledAt ? `<br><small>${purchase.cancelledAt.slice(0, 10)} by ${escapeHtml(purchase.cancelledBy || "-")}</small>` : "";
-  return `<tr><td>${escapeHtml(purchase.docNo)}</td><td>${purchase.date.slice(0, 10)}</td><td>${escapeHtml(purchase.details || "-")}</td><td>${number.format(purchase.totalQty)}</td><td>${baht.format(purchase.totalCost)}</td><td>${purchaseStatusBadge(purchase)}${cancelMeta}</td><td class="inline-actions"><button class="btn" data-action="view-purchase" data-id="${purchase.id}">View</button>${purchase.status !== "cancelled" ? `<button class="btn danger" data-action="cancel-purchase" data-id="${purchase.id}">Cancel</button>` : ""}</td></tr>`;
+  return `<tr><td>${escapeHtml(purchase.docNo)}</td><td>${purchase.date.slice(0, 10)}</td><td>${escapeHtml(purchase.details || "-")}</td><td>${number.format(purchase.totalQty)}</td><td>${baht.format(purchase.totalCost)}</td><td>${purchaseStatusBadge(purchase)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-purchase", purchase.id, "i", "View purchase")}${purchase.status !== "cancelled" ? actionIcon("cancel-purchase", purchase.id, "×", "Cancel purchase", "danger") : ""}</td></tr>`;
 }
 
 function bindPurchases() {
@@ -668,7 +778,6 @@ function openPurchaseDetails(id) {
     <div class="summary-grid" style="margin-bottom:16px">
       <div class="metric"><span>Document No.</span><strong>${escapeHtml(purchase.docNo)}</strong></div>
       <div class="metric"><span>Date</span><strong>${purchase.date.slice(0, 10)}</strong></div>
-      <div class="metric"><span>Status</span><strong>${purchase.status === "cancelled" ? "Cancelled" : "Active"}</strong></div>
       <div class="metric"><span>Total Cost</span><strong>${baht.format(purchase.totalCost)}</strong></div>
     </div>
     <div class="panel" style="margin-bottom:16px">
@@ -707,8 +816,10 @@ function openPurchaseDetails(id) {
 
 function renderSalesReport() {
   const sales = byMonth(state.sales, ui.reportMonth);
+  const saleMemberIds = new Set(sales.map((sale) => sale.userId));
+  if (ui.reportMember !== "all" && !saleMemberIds.has(ui.reportMember)) ui.reportMember = "all";
   const activeOnly = activeDocuments(sales);
-  const daily = summarizeByDate(activeOnly, "total");
+  const daily = summarizeSalesByDate(activeOnly);
   const byMember = summarizeByMember(activeOnly);
   return reportShell("Sales Report", sales, daily, byMember, true);
 }
@@ -720,36 +831,82 @@ function renderPurchaseReport() {
 }
 
 function reportShell(title, rows, daily, members, isSales) {
-  const countableRows = isSales ? activeDocuments(rows) : rows;
-  const qty = countableRows.reduce((sum, item) => sum + item.totalQty, 0);
+  const countableRows = activeDocuments(rows);
+  const transactionRows = filterReportTransactions(rows, isSales);
   const amount = countableRows.reduce((sum, item) => sum + (isSales ? item.total : item.totalCost), 0);
+  const profit = isSales ? countableRows.reduce((sum, item) => sum + (item.profit || item.total - (item.totalCost || 0)), 0) : 0;
   const transactionTitle = isSales ? "Sale Transection" : "Purchases Transection";
   return `
     <section>
-      <div class="section-head">
+      <div class="section-head report-head">
         <div><h2>${title}</h2><p>Review daily totals by month, including quantities and amount summaries.</p></div>
-        <label class="field" style="max-width:220px">Month<input id="reportMonth" type="month" value="${ui.reportMonth}" /></label>
+        <div class="report-actions">
+          <label class="field report-field">Month<input id="reportMonth" type="month" value="${ui.reportMonth}" /></label>
+          <label class="field report-field">Start date<input id="exportStart" type="date" value="${ui.exportStart}" /></label>
+          <label class="field report-field">End date<input id="exportEnd" type="date" value="${ui.exportEnd}" /></label>
+          <button class="btn primary report-export-btn" id="exportReport" type="button">Export to Excel</button>
+        </div>
       </div>
-      <div class="summary-grid">
+      <div class="summary-grid report-summary-grid">
         <div class="metric"><span>Documents</span><strong>${number.format(rows.length)}</strong></div>
-        <div class="metric"><span>Quantity</span><strong>${number.format(qty)}</strong></div>
         <div class="metric"><span>Total amount</span><strong>${baht.format(amount)}</strong></div>
-        <div class="metric"><span>Month</span><strong>${ui.reportMonth}</strong></div>
+        ${isSales ? `<div class="metric"><span>Gross profit</span><strong>${baht.format(profit)}</strong></div>` : ""}
       </div>
       <div class="panel">
         <h3>Daily Summary</h3>
-        <div class="list" style="margin-top:12px"><table><thead><tr><th>Date</th><th>Quantity</th><th>Amount</th></tr></thead><tbody>
-          ${daily.map((item) => `<tr><td>${item.date}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="3"><div class="empty">No data yet</div></td></tr>`}
+        <div class="list" style="margin-top:12px"><table><thead><tr><th>Date</th><th>Quantity</th><th>Amount</th>${isSales ? "<th>Cost</th><th>Profit</th>" : ""}</tr></thead><tbody>
+          ${daily.map((item) => `<tr><td>${item.date}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.amount)}</td>${isSales ? `<td>${baht.format(item.cost || 0)}</td><td>${baht.format(item.profit || 0)}</td>` : ""}</tr>`).join("") || `<tr><td colspan="${isSales ? 5 : 3}"><div class="empty">No data yet</div></td></tr>`}
         </tbody></table></div>
       </div>
       <div class="panel" style="margin-top:16px">
-        <h3>${transactionTitle}</h3>
-        <div class="list" style="margin-top:12px"><table><thead><tr><th>Document</th><th>Date</th>${isSales ? "<th>Member</th>" : "<th>Details</th>"}<th>Quantity</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
-          ${rows.map((item) => reportRow(item, isSales)).join("") || `<tr><td colspan="7"><div class="empty">No data yet</div></td></tr>`}
+        <div class="transaction-head">
+          <h3>${transactionTitle}</h3>
+          <div class="transaction-filters">
+            ${isSales ? memberFilterSelect(rows) : ""}
+            ${statusFilterSelect()}
+          </div>
+        </div>
+        <div class="list" style="margin-top:12px"><table><thead><tr><th>Document</th><th>Date</th>${isSales ? "<th>Member</th>" : "<th>Details</th>"}<th>Quantity</th><th>Amount</th>${isSales ? "<th>Cost</th><th>Profit</th>" : ""}<th>Status</th><th></th></tr></thead><tbody>
+          ${transactionRows.map((item) => reportRow(item, isSales)).join("") || `<tr><td colspan="${isSales ? 9 : 7}"><div class="empty">No data yet</div></td></tr>`}
         </tbody></table></div>
       </div>
       ${members ? `<div class="panel" style="margin-top:16px"><h3>Member Purchase Summary</h3><div class="list" style="margin-top:12px"><table><thead><tr><th>Member</th><th>Quantity</th><th>Amount</th></tr></thead><tbody>${members.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="3"><div class="empty">No data yet</div></td></tr>`}</tbody></table></div></div>` : ""}
     </section>`;
+}
+
+function filterReportTransactions(rows, isSales) {
+  return rows.filter((item) => {
+    if (isSales && ui.reportMember !== "all" && item.userId !== ui.reportMember) return false;
+    if (ui.reportStatus === "active" && item.status === "cancelled") return false;
+    if (ui.reportStatus === "cancelled" && item.status !== "cancelled") return false;
+    return true;
+  });
+}
+
+function memberFilterSelect(rows) {
+  const members = Array.from(
+    new Map(rows.map((sale) => [sale.userId, { id: sale.userId, name: sale.userName }])).values()
+  ).sort((a, b) => a.name.localeCompare(b.name));
+  return `
+    <label class="field transaction-filter">
+      Filter Member
+      <select id="reportMember">
+        <option value="all"${ui.reportMember === "all" ? " selected" : ""}>All members</option>
+        ${members.map((member) => `<option value="${escapeHtml(member.id)}"${ui.reportMember === member.id ? " selected" : ""}>${escapeHtml(member.name)}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
+function statusFilterSelect() {
+  return `
+    <label class="field transaction-filter">
+      Filter Status
+      <select id="reportStatus">
+        <option value="all"${ui.reportStatus === "all" ? " selected" : ""}>All status</option>
+        <option value="active"${ui.reportStatus === "active" ? " selected" : ""}>Active</option>
+        <option value="cancelled"${ui.reportStatus === "cancelled" ? " selected" : ""}>Cancelled</option>
+      </select>
+    </label>`;
 }
 
 function activeDocuments(rows) {
@@ -770,9 +927,9 @@ function reportRow(item, isSales) {
   const canCancel = isAdmin() && item.status !== "cancelled";
   const cancelMeta = item.cancelledAt ? `<br><small>${item.cancelledAt.slice(0, 10)} by ${escapeHtml(item.cancelledBy || "-")}</small>` : "";
   if (!isSales) {
-    return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.details || "-")}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.totalCost)}</td><td>${purchaseStatusBadge(item)}${cancelMeta}</td><td class="inline-actions"><button class="btn" data-action="view-purchase" data-id="${item.id}">View</button>${canCancel ? `<button class="btn danger" data-action="cancel-purchase" data-id="${item.id}">Cancel</button>` : ""}</td></tr>`;
+    return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.details || "-")}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.totalCost)}</td><td>${purchaseStatusBadge(item)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-purchase", item.id, "i", "View purchase")}${canCancel ? actionIcon("cancel-purchase", item.id, "×", "Cancel purchase", "danger") : ""}</td></tr>`;
   }
-  return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.userName)}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.total)}</td><td>${saleStatusBadge(item)}${cancelMeta}</td><td class="inline-actions"><button class="btn" data-action="view-sale" data-id="${item.id}">View</button>${canCancel ? `<button class="btn danger" data-action="cancel-sale" data-id="${item.id}">Cancel</button>` : ""}</td></tr>`;
+  return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.userName)}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.total)}</td><td>${baht.format(item.totalCost || 0)}</td><td>${baht.format(item.profit || item.total - (item.totalCost || 0))}</td><td>${saleStatusBadge(item)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-sale", item.id, "i", "View sale")}${canCancel ? actionIcon("cancel-sale", item.id, "×", "Cancel sale", "danger") : ""}</td></tr>`;
 }
 
 function byMonth(list, month) {
@@ -790,6 +947,19 @@ function summarizeByDate(list, amountKey) {
   return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+function summarizeSalesByDate(list) {
+  const map = {};
+  list.forEach((sale) => {
+    const date = sale.date.slice(0, 10);
+    if (!map[date]) map[date] = { date, qty: 0, amount: 0, cost: 0, profit: 0 };
+    map[date].qty += sale.totalQty;
+    map[date].amount += sale.total;
+    map[date].cost += sale.totalCost || 0;
+    map[date].profit += sale.profit || sale.total - (sale.totalCost || 0);
+  });
+  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function summarizeByMember(list) {
   const map = {};
   list.forEach((sale) => {
@@ -803,6 +973,24 @@ function summarizeByMember(list) {
 function bindReports() {
   document.getElementById("reportMonth").addEventListener("change", (event) => {
     ui.reportMonth = event.target.value;
+    render();
+  });
+  document.getElementById("exportStart").addEventListener("change", (event) => {
+    ui.exportStart = event.target.value;
+  });
+  document.getElementById("exportEnd").addEventListener("change", (event) => {
+    ui.exportEnd = event.target.value;
+  });
+  document.getElementById("exportReport").addEventListener("click", () => exportReport(ui.activeTab === "salesReport"));
+  const reportMember = document.getElementById("reportMember");
+  if (reportMember) {
+    reportMember.addEventListener("change", (event) => {
+      ui.reportMember = event.target.value;
+      render();
+    });
+  }
+  document.getElementById("reportStatus")?.addEventListener("change", (event) => {
+    ui.reportStatus = event.target.value;
     render();
   });
   app.querySelectorAll('[data-action="view-sale"]').forEach((button) =>
@@ -835,6 +1023,73 @@ function bindReports() {
   );
 }
 
+function reportRowsInExportRange(isSales) {
+  const source = isSales ? state.sales : state.purchases;
+  const start = ui.exportStart || "0000-01-01";
+  const end = ui.exportEnd || "9999-12-31";
+  return source.filter((item) => {
+    const date = item.date.slice(0, 10);
+    return item.status !== "cancelled" && date >= start && date <= end;
+  });
+}
+
+function exportReport(isSales) {
+  const rows = reportRowsInExportRange(isSales);
+  const header = isSales
+    ? ["Document No", "Date", "Member", "Status", "Product", "Unit", "Qty", "Unit Price", "Line Amount", "Unit Cost", "Line Cost", "Profit"]
+    : ["Document No", "Date", "Details", "Status", "Product", "Unit", "Qty", "Unit Cost", "Line Total", "Document Total"];
+  const csvRows = [header];
+
+  rows.forEach((doc) => {
+    if (isSales) {
+      doc.items.forEach((item) => {
+        const lineAmount = item.qty * item.price;
+        const lineCost = item.lineCost || 0;
+        csvRows.push([
+          doc.docNo,
+          doc.date.slice(0, 10),
+          doc.userName,
+          doc.status || "active",
+          item.name,
+          item.unit,
+          item.qty,
+          item.price,
+          lineAmount,
+          item.cost || 0,
+          lineCost,
+          item.profit || lineAmount - lineCost
+        ]);
+      });
+    } else {
+      doc.items.forEach((item) => {
+        csvRows.push([
+          doc.docNo,
+          doc.date.slice(0, 10),
+          doc.details || "",
+          doc.status || "active",
+          item.name,
+          item.unit,
+          item.qty,
+          item.cost,
+          item.lineTotal ?? item.qty * item.cost,
+          doc.totalCost
+        ]);
+      });
+    }
+  });
+
+  const csv = "\uFEFF" + csvRows.map((row) => row.map(escapeCsv).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  const label = isSales ? "sales-report" : "purchase-report";
+  link.href = URL.createObjectURL(blob);
+  link.download = `${label}-${ui.exportStart || "start"}-to-${ui.exportEnd || "end"}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  URL.revokeObjectURL(link.href);
+  link.remove();
+}
+
 function openSaleDetails(id) {
   const sale = state.sales.find((item) => item.id === id);
   if (!sale) return;
@@ -845,8 +1100,9 @@ function openSaleDetails(id) {
       <div class="metric"><span>Document No.</span><strong>${escapeHtml(sale.docNo)}</strong></div>
       <div class="metric"><span>Date</span><strong>${sale.date.slice(0, 10)}</strong></div>
       <div class="metric"><span>Member</span><strong>${escapeHtml(sale.userName)}</strong></div>
-      <div class="metric"><span>Status</span><strong>${sale.status === "cancelled" ? "Cancelled" : "Active"}</strong></div>
       <div class="metric"><span>Total Amount</span><strong>${baht.format(sale.total)}</strong></div>
+      <div class="metric"><span>Cost</span><strong>${baht.format(sale.totalCost || 0)}</strong></div>
+      <div class="metric"><span>Profit</span><strong>${baht.format(sale.profit || sale.total - (sale.totalCost || 0))}</strong></div>
     </div>
     <div class="panel" style="margin-bottom:16px">
       <h3>Transaction</h3>
@@ -857,9 +1113,9 @@ function openSaleDetails(id) {
       <h3>Items</h3>
       <div class="list" style="margin-top:12px">
         <table>
-          <thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit Price</th><th>Line Total</th></tr></thead>
+          <thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit Price</th><th>Line Total</th><th>Cost</th><th>Profit</th></tr></thead>
           <tbody>
-            ${sale.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.price)}</td><td>${baht.format(item.qty * item.price)}</td></tr>`).join("")}
+            ${sale.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.price)}</td><td>${baht.format(item.qty * item.price)}</td><td>${baht.format(item.lineCost || 0)}</td><td>${baht.format(item.profit || item.qty * item.price - (item.lineCost || 0))}</td></tr>`).join("")}
           </tbody>
         </table>
       </div>
@@ -887,7 +1143,7 @@ function renderCategories() {
     <section>
       <div class="section-head"><div><h2>Categories</h2><p>Add, edit, or remove product categories used in the POS.</p></div><button class="btn primary" data-action="add-category">Add Category</button></div>
       <div class="panel"><div class="list"><table><thead><tr><th>Category</th><th>Products</th><th></th></tr></thead><tbody>
-        ${state.categories.map((category) => `<tr><td>${escapeHtml(category.name)}</td><td>${state.products.filter((product) => product.categoryId === category.id).length}</td><td class="inline-actions"><button class="btn" data-action="edit-category" data-id="${category.id}">Edit</button><button class="btn danger" data-action="delete-category" data-id="${category.id}">Delete</button></td></tr>`).join("")}
+        ${state.categories.map((category) => `<tr><td>${escapeHtml(category.name)}</td><td>${state.products.filter((product) => product.categoryId === category.id).length}</td><td class="inline-actions action-cell">${actionIcon("edit-category", category.id, "✎", "Edit category")}${actionIcon("delete-category", category.id, "×", "Delete category", "danger")}</td></tr>`).join("")}
       </tbody></table></div></div>
     </section>`;
 }
@@ -939,7 +1195,7 @@ function renderMembers() {
       <div class="panel"><div class="list"><table><thead><tr><th>User name</th><th>Password</th><th>Outstanding</th><th>Special discount</th><th>Net payable</th><th></th></tr></thead><tbody>
         ${state.users.map((user) => {
           const net = Math.max(0, (user.balance || 0) - (user.monthlyDiscount || 0));
-          return `<tr><td>${escapeHtml(user.name)}</td><td>••••</td><td>${baht.format(user.balance || 0)}</td><td>${baht.format(user.monthlyDiscount || 0)}</td><td>${baht.format(net)}</td><td class="inline-actions"><button class="btn" data-action="edit-user" data-id="${user.id}">Edit</button><button class="btn warn" data-action="pay-user" data-id="${user.id}">Receive Payment</button><button class="btn danger" data-action="delete-user" data-id="${user.id}">Delete</button></td></tr>`;
+          return `<tr><td>${escapeHtml(user.name)}</td><td>••••</td><td>${baht.format(user.balance || 0)}</td><td>${baht.format(user.monthlyDiscount || 0)}</td><td>${baht.format(net)}</td><td class="inline-actions action-cell">${actionIcon("edit-user", user.id, "✎", "Edit member")}${actionIcon("pay-user", user.id, "฿", "Receive payment", "warn")}${actionIcon("delete-user", user.id, "×", "Delete member", "danger")}</td></tr>`;
         }).join("")}
       </tbody></table></div></div>
     </section>`;
@@ -1191,10 +1447,10 @@ async function refresh() {
   render();
 }
 
-function openModal(html) {
+function openModal(html, className = "") {
   const wrapper = document.createElement("div");
   wrapper.className = "modal-backdrop";
-  wrapper.innerHTML = `<div class="modal">${html}</div>`;
+  wrapper.innerHTML = `<div class="modal ${className}">${html}</div>`;
   document.body.appendChild(wrapper);
   wrapper.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", closeModal));
   wrapper.addEventListener("click", (event) => {

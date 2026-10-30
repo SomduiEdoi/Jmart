@@ -78,11 +78,32 @@ function sales() {
         name: item.name,
         unit: item.unit,
         price: item.price,
-        qty: item.qty
+        qty: item.qty,
+        cost: item.cost || 0,
+        lineCost: item.line_cost || 0,
+        profit: item.profit || item.qty * item.price - (item.line_cost || 0)
       });
     }
   });
   return rows;
+}
+
+function consumeFifoLots(productId, qty) {
+  let remaining = qty;
+  const lots = db.prepare(`
+    SELECT * FROM inventory_lots
+    WHERE product_id = ? AND status = 'active' AND remaining_qty > 0
+    ORDER BY date, rowid
+  `).all(productId);
+  const consumed = [];
+  lots.forEach((lot) => {
+    if (remaining <= 0) return;
+    const takeQty = Math.min(remaining, lot.remaining_qty);
+    consumed.push({ lot, qty: takeQty, cost: lot.cost, lineCost: takeQty * lot.cost });
+    remaining -= takeQty;
+  });
+  if (remaining > 0) throw new Error("Not enough FIFO stock cost layers for this sale.");
+  return consumed;
 }
 
 function purchases() {
@@ -214,9 +235,9 @@ app.post("/api/products", requireAuth, requireAdmin, (req, res) => {
 
 app.put("/api/products/:id", requireAuth, requireAdmin, (req, res) => {
   try {
-    const existing = db.prepare("SELECT stock FROM products WHERE id = ?").get(req.params.id);
+    const existing = db.prepare("SELECT stock, cost FROM products WHERE id = ?").get(req.params.id);
     if (!existing) throw new Error("Product not found.");
-    const product = normalizeProduct(req.body, req.params.id, existing.stock);
+    const product = normalizeProduct(req.body, req.params.id, existing.stock, existing.cost);
     db.prepare(`
       UPDATE products
       SET code = @code, image = @image, category_id = @categoryId, name = @name, unit = @unit,
@@ -247,7 +268,7 @@ app.delete("/api/products/:id", requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-function normalizeProduct(body, productId, stock) {
+function normalizeProduct(body, productId, stock, cost = null) {
   return {
     id: productId,
     code: assertText(body.code, "Product code"),
@@ -255,7 +276,7 @@ function normalizeProduct(body, productId, stock) {
     categoryId: assertText(body.categoryId, "Category"),
     name: assertText(body.name, "Product name"),
     unit: assertText(body.unit, "Unit"),
-    cost: assertNumber(body.cost, "Cost"),
+    cost: cost === null ? assertNumber(body.cost, "Cost") : assertNumber(cost, "Cost"),
     price: assertNumber(body.price, "Sale price"),
     stock: Math.floor(assertNumber(stock, "Stock")),
     minStock: Math.floor(assertNumber(body.minStock, "Minimum stock")),
@@ -365,9 +386,15 @@ app.post("/api/purchases", requireAuth, requireAdmin, (req, res) => {
         totalCost
       );
       const insertItem = db.prepare("INSERT INTO purchase_items (id, purchase_id, product_id, name, qty, unit, cost, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertLot = db.prepare(`
+        INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+      `);
       const addStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
       prepared.forEach((item) => {
-        insertItem.run(id("poi"), purchaseId, item.product.id, item.product.name, item.qty, item.product.unit, item.cost, item.lineTotal);
+        const purchaseItemId = id("poi");
+        insertItem.run(purchaseItemId, purchaseId, item.product.id, item.product.name, item.qty, item.product.unit, item.cost, item.lineTotal);
+        insertLot.run(id("lot"), purchaseItemId, purchaseId, item.product.id, purchaseDate, item.qty, item.qty, item.cost);
         addStock.run(item.qty, item.product.id);
       });
       return { id: purchaseId, docNo, date: purchaseDate, details, totalQty, totalCost };
@@ -392,12 +419,17 @@ app.post("/api/purchases/:id/cancel", requireAuth, requireAdmin, (req, res) => {
         if (product.stock < item.qty) {
           throw new Error(`This purchase cannot be cancelled because stock for ${product.name} is lower than the received quantity.`);
         }
+        const lot = db.prepare("SELECT remaining_qty FROM inventory_lots WHERE purchase_item_id = ? AND status = 'active'").get(item.id);
+        if (lot && lot.remaining_qty < item.qty) {
+          throw new Error(`This purchase cannot be cancelled because FIFO stock for ${product.name} has already been sold.`);
+        }
       });
 
       const removeStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
       items.forEach((item) => {
         removeStock.run(item.qty, item.product_id);
       });
+      db.prepare("UPDATE inventory_lots SET remaining_qty = 0, status = 'cancelled' WHERE purchase_id = ?").run(purchaseId);
 
       db.prepare("UPDATE purchases SET status = 'cancelled', cancelled_at = ?, cancelled_by = ? WHERE id = ?").run(
         new Date().toISOString(),
@@ -428,18 +460,32 @@ app.post("/api/sales", requireAuth, (req, res) => {
       });
       const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
       const total = prepared.reduce((sum, item) => sum + item.qty * item.product.price, 0);
+      const preparedWithCost = prepared.map((item) => {
+        const lots = consumeFifoLots(item.product.id, item.qty);
+        const lineCost = lots.reduce((sum, lot) => sum + lot.lineCost, 0);
+        return { ...item, lots, lineCost, cost: lineCost / item.qty, profit: item.qty * item.product.price - lineCost };
+      });
+      const totalCost = preparedWithCost.reduce((sum, item) => sum + item.lineCost, 0);
+      const profit = total - totalCost;
       const saleId = id("so");
       const docNo = nextDocumentNumber("SO");
       const date = new Date().toISOString();
-      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total);
-      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cost, profit, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total, totalCost, profit);
+      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, cost, line_cost, profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertSaleLot = db.prepare("INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost) VALUES (?, ?, ?, ?, ?, ?)");
+      const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ? WHERE id = ?");
       const removeStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
-      prepared.forEach((item) => {
-        insertItem.run(id("soi"), saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty);
+      preparedWithCost.forEach((item) => {
+        const saleItemId = id("soi");
+        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty, item.cost, item.lineCost, item.profit);
+        item.lots.forEach((consumed) => {
+          insertSaleLot.run(id("sil"), saleItemId, consumed.lot.id, consumed.qty, consumed.cost, consumed.lineCost);
+          updateLot.run(consumed.qty, consumed.lot.id);
+        });
         removeStock.run(item.qty, item.product.id);
       });
       db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(total, req.user.id);
-      return { id: saleId, docNo, date, totalQty, total, paymentType: "Credit" };
+      return { id: saleId, docNo, date, totalQty, total, totalCost, profit, paymentType: "Credit" };
     })(req.body.items);
     res.status(201).json(sale);
   } catch (error) {
@@ -461,7 +507,10 @@ app.post("/api/sales/:id/cancel", requireAuth, requireAdmin, (req, res) => {
 
       const items = db.prepare("SELECT * FROM sale_items WHERE sale_id = ? ORDER BY rowid").all(saleId);
       const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
+      const restoreLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty + ? WHERE id = ?");
       items.forEach((item) => {
+        const lots = db.prepare("SELECT * FROM sale_item_lots WHERE sale_item_id = ?").all(item.id);
+        lots.forEach((lot) => restoreLot.run(lot.qty, lot.lot_id));
         restoreStock.run(item.qty, item.product_id);
       });
 

@@ -10,8 +10,10 @@ initDb();
 
 db.transaction(() => {
   db.prepare("DELETE FROM sale_items").run();
+  db.prepare("DELETE FROM sale_item_lots").run();
   db.prepare("DELETE FROM sales").run();
   db.prepare("DELETE FROM purchase_items").run();
+  db.prepare("DELETE FROM inventory_lots").run();
   db.prepare("DELETE FROM purchases").run();
   db.prepare("DELETE FROM products").run();
   db.prepare("DELETE FROM categories").run();

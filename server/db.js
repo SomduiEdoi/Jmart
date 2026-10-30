@@ -54,6 +54,8 @@ function initDb() {
       user_name TEXT NOT NULL,
       total_qty INTEGER NOT NULL,
       total REAL NOT NULL,
+      total_cost REAL NOT NULL DEFAULT 0,
+      profit REAL NOT NULL DEFAULT 0,
       payment_type TEXT NOT NULL DEFAULT 'Credit',
       status TEXT NOT NULL DEFAULT 'active',
       cancelled_at TEXT,
@@ -67,7 +69,10 @@ function initDb() {
       name TEXT NOT NULL,
       unit TEXT NOT NULL,
       price REAL NOT NULL,
-      qty INTEGER NOT NULL
+      qty INTEGER NOT NULL,
+      cost REAL NOT NULL DEFAULT 0,
+      line_cost REAL NOT NULL DEFAULT 0,
+      profit REAL NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS purchases (
@@ -92,17 +97,55 @@ function initDb() {
       cost REAL NOT NULL,
       line_total REAL NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS inventory_lots (
+      id TEXT PRIMARY KEY,
+      purchase_item_id TEXT,
+      purchase_id TEXT,
+      product_id TEXT NOT NULL REFERENCES products(id),
+      date TEXT NOT NULL,
+      qty INTEGER NOT NULL,
+      remaining_qty INTEGER NOT NULL,
+      cost REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS sale_item_lots (
+      id TEXT PRIMARY KEY,
+      sale_item_id TEXT NOT NULL REFERENCES sale_items(id) ON DELETE CASCADE,
+      lot_id TEXT NOT NULL REFERENCES inventory_lots(id),
+      qty INTEGER NOT NULL,
+      cost REAL NOT NULL,
+      line_cost REAL NOT NULL
+    );
   `);
 
   const saleColumns = db.prepare("PRAGMA table_info(sales)").all().map((column) => column.name);
   if (!saleColumns.includes("status")) {
     db.prepare("ALTER TABLE sales ADD COLUMN status TEXT NOT NULL DEFAULT 'active'").run();
   }
+  if (!saleColumns.includes("total_cost")) {
+    db.prepare("ALTER TABLE sales ADD COLUMN total_cost REAL NOT NULL DEFAULT 0").run();
+  }
+  if (!saleColumns.includes("profit")) {
+    db.prepare("ALTER TABLE sales ADD COLUMN profit REAL NOT NULL DEFAULT 0").run();
+  }
   if (!saleColumns.includes("cancelled_at")) {
     db.prepare("ALTER TABLE sales ADD COLUMN cancelled_at TEXT").run();
   }
   if (!saleColumns.includes("cancelled_by")) {
     db.prepare("ALTER TABLE sales ADD COLUMN cancelled_by TEXT").run();
+  }
+
+  const saleItemColumns = db.prepare("PRAGMA table_info(sale_items)").all().map((column) => column.name);
+  if (!saleItemColumns.includes("cost")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN cost REAL NOT NULL DEFAULT 0").run();
+  }
+  if (!saleItemColumns.includes("line_cost")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN line_cost REAL NOT NULL DEFAULT 0").run();
+  }
+  if (!saleItemColumns.includes("profit")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN profit REAL NOT NULL DEFAULT 0").run();
   }
 
   const purchaseColumns = db.prepare("PRAGMA table_info(purchases)").all().map((column) => column.name);
@@ -128,7 +171,32 @@ function initDb() {
     db.prepare("UPDATE purchase_items SET line_total = qty * cost WHERE line_total = 0").run();
   }
 
+  db.prepare(`
+    UPDATE sale_items
+    SET cost = COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
+        line_cost = qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
+        profit = (qty * price) - (qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0))
+    WHERE line_cost = 0
+  `).run();
+  db.prepare(`
+    UPDATE sales
+    SET total_cost = COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0),
+        profit = total - COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0)
+    WHERE total_cost = 0
+  `).run();
+
   if (db.prepare("SELECT COUNT(*) AS count FROM users").get().count === 0) seed();
+
+  if (db.prepare("SELECT COUNT(*) AS count FROM inventory_lots").get().count === 0) {
+    const products = db.prepare("SELECT id, stock, cost FROM products WHERE stock > 0").all();
+    const insertLot = db.prepare(`
+      INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, status)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'active')
+    `);
+    products.forEach((product) => {
+      insertLot.run(id("lot"), product.id, new Date().toISOString(), product.stock, product.stock, product.cost);
+    });
+  }
 }
 
 function seed() {
@@ -189,6 +257,8 @@ function saleRow(row) {
     userName: row.user_name,
     totalQty: row.total_qty,
     total: row.total,
+    totalCost: row.total_cost || 0,
+    profit: row.profit || 0,
     paymentType: row.payment_type,
     status: row.status || "active",
     cancelledAt: row.cancelled_at || null,

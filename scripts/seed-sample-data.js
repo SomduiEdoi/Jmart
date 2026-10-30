@@ -261,22 +261,33 @@ function main() {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertSale = db.prepare(`
-    INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, payment_type, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'Credit', 'active')
+    INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cost, profit, payment_type, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit', 'active')
   `);
   const insertSaleItem = db.prepare(`
-    INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, cost, line_cost, profit)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const insertLot = db.prepare(`
+    INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+  `);
+  const insertSaleLot = db.prepare(`
+    INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ? WHERE id = ?");
   const increaseStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
   const decreaseStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
   const increaseBalance = db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?");
 
   const currentStock = {};
+  const localLots = {};
   const inserted = db.transaction(() => {
     products.forEach((product) => {
       insertProduct.run(product);
       currentStock[product.id] = 0;
+      localLots[product.id] = [];
     });
 
     for (let index = 1; index <= 420; index += 1) {
@@ -300,9 +311,13 @@ function main() {
       const totalCost = items.reduce((sum, item) => sum + item.lineTotal, 0);
       insertPurchase.run(purchaseId, docNo, date, details, totalQty, totalCost);
       items.forEach(({ product, qty, cost, lineTotal }) => {
+        const purchaseItemId = id("poi");
+        const lotId = id("lot");
         currentStock[product.id] += qty;
         increaseStock.run(qty, product.id);
-        insertPurchaseItem.run(id("poi"), purchaseId, product.id, product.name, qty, product.unit, cost, lineTotal);
+        insertPurchaseItem.run(purchaseItemId, purchaseId, product.id, product.name, qty, product.unit, cost, lineTotal);
+        insertLot.run(lotId, purchaseItemId, purchaseId, product.id, date, qty, qty, cost);
+        localLots[product.id].push({ id: lotId, remainingQty: qty, cost });
       });
     }
 
@@ -321,17 +336,35 @@ function main() {
         if (maxQty <= 0) return;
         const qty = randomInt(1, maxQty);
         const lineTotal = qty * product.price;
-        items.push({ product, qty, lineTotal });
+        let remaining = qty;
+        const lots = [];
+        localLots[product.id].forEach((lot) => {
+          if (remaining <= 0) return;
+          const takeQty = Math.min(remaining, lot.remainingQty);
+          if (takeQty <= 0) return;
+          lot.remainingQty -= takeQty;
+          remaining -= takeQty;
+          lots.push({ ...lot, qty: takeQty, lineCost: takeQty * lot.cost });
+        });
+        const lineCost = lots.reduce((sum, lot) => sum + lot.lineCost, 0);
+        items.push({ product, qty, lineTotal, lots, lineCost, cost: lineCost / qty, profit: lineTotal - lineCost });
       });
 
       if (!items.length) continue;
       const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
       const total = items.reduce((sum, item) => sum + item.lineTotal, 0);
-      insertSale.run(saleId, docNo, date, member.id, member.name, totalQty, total);
-      items.forEach(({ product, qty }) => {
+      const totalCost = items.reduce((sum, item) => sum + item.lineCost, 0);
+      const profit = total - totalCost;
+      insertSale.run(saleId, docNo, date, member.id, member.name, totalQty, total, totalCost, profit);
+      items.forEach(({ product, qty, cost, lineCost, profit: lineProfit, lots }) => {
+        const saleItemId = id("soi");
         currentStock[product.id] -= qty;
         decreaseStock.run(qty, product.id);
-        insertSaleItem.run(id("soi"), saleId, product.id, product.name, product.unit, product.price, qty);
+        insertSaleItem.run(saleItemId, saleId, product.id, product.name, product.unit, product.price, qty, cost, lineCost, lineProfit);
+        lots.forEach((lot) => {
+          updateLot.run(lot.qty, lot.id);
+          insertSaleLot.run(id("sil"), saleItemId, lot.id, lot.qty, lot.cost, lot.lineCost);
+        });
       });
       increaseBalance.run(total, member.id);
     }
