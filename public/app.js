@@ -305,9 +305,9 @@ function renderProducts() {
   return `
     <section>
       <div class="section-head">
-        <div><h2>Products</h2><p>Create the product master list, scan product codes, mark favourites, and monitor low stock.</p></div>
+        <div><h2>Products</h2><p>Create the product master list, mark favourites, and monitor low stock.</p></div>
         <div class="inline-actions">
-          <button class="btn warn" data-action="scan-product">Scan QR</button>
+          <button class="btn" data-action="export-products" type="button">Export Excel</button>
           <button class="btn primary" data-action="add-product">Add Product</button>
         </div>
       </div>
@@ -423,6 +423,7 @@ async function handleProductAction(event) {
   const id = event.currentTarget.dataset.id;
   try {
     if (action === "add-product") openProductModal();
+    if (action === "export-products") await exportProducts(event.currentTarget);
     if (action === "edit-product") openProductModal(id);
     if (action === "delete-product") {
       if (!confirm("Delete this product?")) return;
@@ -433,16 +434,15 @@ async function handleProductAction(event) {
       await api(`/api/products/${id}/favourite`, { method: "PATCH" });
       await refresh();
     }
-    if (action === "scan-product") scanProductCode();
   } catch (error) {
     alert(error.message);
   }
 }
 
-function openProductModal(id, scannedCode = "") {
+function openProductModal(id) {
   const isEditing = Boolean(id);
   const product = state.products.find((item) => item.id === id) || {
-    code: scannedCode || `JM-${String(state.products.length + 1).padStart(4, "0")}`,
+    code: `JM-${String(state.products.length + 1).padStart(4, "0")}`,
     image: "",
     categoryId: state.categories[0]?.id || "",
     name: "",
@@ -518,26 +518,38 @@ function fileToDataUrl(file) {
   });
 }
 
-async function scanProductCode() {
-  if (!("BarcodeDetector" in window)) {
-    const code = prompt("This browser does not support direct QR scanning yet. Please enter the product code.");
-    if (code) openProductModal(null, code);
-    return;
-  }
-  openModal(`<h3>Scan QR</h3><video id="scanVideo" style="width:100%;border-radius:8px;background:#111" autoplay playsinline></video><div class="modal-actions"><button class="btn" data-close>Cancel</button></div>`);
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-  const video = document.getElementById("scanVideo");
-  video.srcObject = stream;
-  const detector = new BarcodeDetector({ formats: ["qr_code", "ean_13", "code_128"] });
-  const timer = setInterval(async () => {
-    const codes = await detector.detect(video).catch(() => []);
-    if (codes.length) {
-      clearInterval(timer);
-      stream.getTracks().forEach((track) => track.stop());
-      closeModal();
-      openProductModal(null, codes[0].rawValue);
+async function exportProducts(button) {
+  const productIds = filteredProducts().map((product) => product.id);
+  if (!productIds.length) throw new Error("No products to export.");
+
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/products/export", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.token}`
+      },
+      body: JSON.stringify({ productIds })
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) logout(false);
+      throw new Error(payload.error || "Could not export products.");
     }
-  }, 700);
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `products_export_${new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" })}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function openPurchaseModal() {

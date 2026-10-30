@@ -372,11 +372,6 @@ textarea {
   background: var(--brand-dark);
 }
 
-.btn.warn {
-  background: #fff4df;
-  color: #8a5611;
-}
-
 .btn.danger {
   background: #fee8e8;
   color: var(--danger);

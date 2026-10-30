@@ -4,6 +4,7 @@ const path = require("node:path");
 const express = require("express");
 const helmet = require("helmet");
 const bcrypt = require("bcryptjs");
+const ExcelJS = require("exceljs");
 const jwt = require("jsonwebtoken");
 const { db, id, initDb, userRow, productRow, saleRow, purchaseRow } = require("./db");
 
@@ -215,6 +216,65 @@ app.delete("/api/categories/:id", requireAuth, requireAdmin, (req, res) => {
     if (count) throw new Error("This category still has products.");
     db.prepare("DELETE FROM categories WHERE id = ?").run(req.params.id);
     res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const productIds = req.body?.productIds;
+    if (!Array.isArray(productIds) || productIds.length > 20000 ||
+      productIds.some((productId) => typeof productId !== "string") ||
+      new Set(productIds).size !== productIds.length) {
+      return res.status(400).json({ error: "Invalid product selection." });
+    }
+
+    const productsById = new Map(products().map((product) => [product.id, product]));
+    if (productIds.some((productId) => !productsById.has(productId))) {
+      return res.status(400).json({ error: "Product list changed. Please refresh and try again." });
+    }
+    const categoriesById = new Map(categories().map((category) => [category.id, category.name]));
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Products", { views: [{ state: "frozen", ySplit: 1 }] });
+    sheet.columns = [
+      { header: "Code", key: "code", width: 18 },
+      { header: "Category", key: "category", width: 22 },
+      { header: "Product", key: "name", width: 36 },
+      { header: "Unit", key: "unit", width: 14 },
+      { header: "Cost (THB)", key: "cost", width: 16, style: { numFmt: "#,##0.00" } },
+      { header: "Price (THB)", key: "price", width: 16, style: { numFmt: "#,##0.00" } },
+      { header: "Stock", key: "stock", width: 12 },
+      { header: "Minimum Stock", key: "minStock", width: 18 },
+      { header: "Status", key: "status", width: 16 },
+      { header: "Favourite", key: "favourite", width: 14 },
+      { header: "Image URL", key: "image", width: 45 }
+    ];
+    sheet.getRow(1).font = { bold: true };
+    sheet.autoFilter = "A1:K1";
+
+    productIds.forEach((productId) => {
+      const product = productsById.get(productId);
+      sheet.addRow({
+        code: product.code,
+        category: categoriesById.get(product.categoryId) || "-",
+        name: product.name,
+        unit: product.unit,
+        cost: product.cost,
+        price: product.price,
+        stock: product.stock,
+        minStock: product.minStock,
+        status: product.stock <= 0 ? "Out" : product.stock <= product.minStock ? "Low stock" : "Available",
+        favourite: product.favourite ? "Yes" : "No",
+        image: product.image
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const date = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="products_export_${date}.xlsx"`);
+    res.send(buffer);
   } catch (error) {
     handleError(res, error);
   }
