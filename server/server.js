@@ -276,6 +276,82 @@ app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => 
   }
 });
 
+app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { type, documentIds, startDate, endDate } = req.body || {};
+    const validDate = (value) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value);
+    if (!["sales", "purchases"].includes(type) || !Array.isArray(documentIds) ||
+      documentIds.length > 20000 || documentIds.some((documentId) => typeof documentId !== "string") ||
+      new Set(documentIds).size !== documentIds.length || !validDate(startDate) || !validDate(endDate) ||
+      (startDate && endDate && startDate > endDate)) {
+      return res.status(400).json({ error: "Invalid report selection." });
+    }
+
+    const isSales = type === "sales";
+    const documentsById = new Map((isSales ? sales() : purchases()).map((document) => [document.id, document]));
+    if (documentIds.some((documentId) => {
+      const document = documentsById.get(documentId);
+      const date = document?.date.slice(0, 10);
+      return !document || document.status === "cancelled" ||
+        (startDate && date < startDate) || (endDate && date > endDate);
+    })) {
+      return res.status(400).json({ error: "Report data changed. Please refresh and try again." });
+    }
+
+    const columns = isSales
+      ? [
+        ["Document No", 20], ["Date", 14], ["Member", 24], ["Status", 14],
+        ["Product", 36], ["Unit", 14], ["Qty", 12], ["Unit Price", 16],
+        ["Line Amount", 18], ["Unit Cost", 16], ["Line Cost", 18], ["Profit", 18]
+      ]
+      : [
+        ["Document No", 20], ["Date", 14], ["Details", 28], ["Status", 14],
+        ["Product", 36], ["Unit", 14], ["Qty", 12], ["Unit Cost", 16],
+        ["Line Total", 18], ["Document Total", 18]
+      ];
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet(isSales ? "Sales Report" : "Purchase Report", {
+      views: [{ state: "frozen", ySplit: 1 }]
+    });
+    sheet.columns = columns.map(([header, width]) => ({ header, width }));
+    sheet.getRow(1).font = { bold: true };
+    sheet.autoFilter = isSales ? "A1:L1" : "A1:J1";
+    sheet.getColumn(7).numFmt = "#,##0";
+    for (let column = 8; column <= columns.length; column += 1) {
+      sheet.getColumn(column).numFmt = "#,##0.00";
+    }
+
+    documentIds.forEach((documentId) => {
+      const document = documentsById.get(documentId);
+      document.items.forEach((item) => {
+        if (isSales) {
+          const lineAmount = item.qty * item.price;
+          const lineCost = item.lineCost || 0;
+          sheet.addRow([
+            document.docNo, document.date.slice(0, 10), document.userName, document.status || "active",
+            item.name, item.unit, item.qty, item.price, lineAmount, item.cost || 0,
+            lineCost, item.profit ?? lineAmount - lineCost
+          ]);
+        } else {
+          sheet.addRow([
+            document.docNo, document.date.slice(0, 10), document.details || "", document.status || "active",
+            item.name, item.unit, item.qty, item.cost,
+            item.lineTotal ?? item.qty * item.cost, document.totalCost
+          ]);
+        }
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = `${isSales ? "sales-report" : "purchase-report"}-${startDate || "start"}-to-${endDate || "end"}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
 app.post("/api/products", requireAuth, requireAdmin, (req, res) => {
   try {
     const product = normalizeProduct(req.body, id("p"), 0);

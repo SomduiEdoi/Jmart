@@ -8,6 +8,8 @@ const ui = {
   reportMonth: new Date().toISOString().slice(0, 7),
   reportMember: "all",
   reportStatus: "all",
+  salesReportSort: "date_desc",
+  purchaseReportSort: "date_desc",
   exportStart: new Date().toISOString().slice(0, 7) + "-01",
   exportEnd: new Date().toISOString().slice(0, 10)
 };
@@ -76,11 +78,6 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function escapeCsv(value) {
-  const text = String(value ?? "");
-  return `"${text.replaceAll('"', '""')}"`;
 }
 
 function categoryName(id) {
@@ -844,7 +841,7 @@ function renderPurchaseReport() {
 
 function reportShell(title, rows, daily, members, isSales) {
   const countableRows = activeDocuments(rows);
-  const transactionRows = filterReportTransactions(rows, isSales);
+  const transactionRows = sortReportTransactions(filterReportTransactions(rows, isSales), isSales);
   const amount = countableRows.reduce((sum, item) => sum + (isSales ? item.total : item.totalCost), 0);
   const profit = isSales ? countableRows.reduce((sum, item) => sum + (item.profit || item.total - (item.totalCost || 0)), 0) : 0;
   const transactionTitle = isSales ? "Sale Transection" : "Purchases Transection";
@@ -876,6 +873,7 @@ function reportShell(title, rows, daily, members, isSales) {
           <div class="transaction-filters">
             ${isSales ? memberFilterSelect(rows) : ""}
             ${statusFilterSelect()}
+            ${reportSortSelect(isSales)}
           </div>
         </div>
         <div class="list" style="margin-top:12px"><table><thead><tr><th>Document</th><th>Date</th>${isSales ? "<th>Member</th>" : "<th>Details</th>"}<th>Quantity</th><th>Amount</th>${isSales ? "<th>Cost</th><th>Profit</th>" : ""}<th>Status</th><th></th></tr></thead><tbody>
@@ -893,6 +891,36 @@ function filterReportTransactions(rows, isSales) {
     if (ui.reportStatus === "cancelled" && item.status !== "cancelled") return false;
     return true;
   });
+}
+
+function sortReportTransactions(rows, isSales) {
+  const sort = isSales ? ui.salesReportSort : ui.purchaseReportSort;
+  const amount = (item) => isSales ? item.total : item.totalCost;
+  return [...rows].sort((a, b) => {
+    let difference = 0;
+    if (sort === "date_asc") difference = a.date.localeCompare(b.date);
+    else if (sort === "amount_desc") difference = amount(b) - amount(a);
+    else if (sort === "amount_asc") difference = amount(a) - amount(b);
+    else if (sort === "qty_desc") difference = b.totalQty - a.totalQty;
+    else if (sort === "qty_asc") difference = a.totalQty - b.totalQty;
+    else difference = b.date.localeCompare(a.date);
+    return difference || a.docNo.localeCompare(b.docNo);
+  });
+}
+
+function reportSortSelect(isSales) {
+  const selected = isSales ? ui.salesReportSort : ui.purchaseReportSort;
+  const options = [
+    ["date_desc", "Date newest first"],
+    ["date_asc", "Date oldest first"],
+    ["amount_desc", "Amount high to low"],
+    ["amount_asc", "Amount low to high"],
+    ["qty_desc", "Quantity high to low"],
+    ["qty_asc", "Quantity low to high"]
+  ];
+  return `<label class="field transaction-filter">Sort by
+    <select id="reportSort">${options.map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("")}</select>
+  </label>`;
 }
 
 function memberFilterSelect(rows) {
@@ -993,7 +1021,17 @@ function bindReports() {
   document.getElementById("exportEnd").addEventListener("change", (event) => {
     ui.exportEnd = event.target.value;
   });
-  document.getElementById("exportReport").addEventListener("click", () => exportReport(ui.activeTab === "salesReport"));
+  document.getElementById("exportReport").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await exportReport(ui.activeTab === "salesReport");
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
   const reportMember = document.getElementById("reportMember");
   if (reportMember) {
     reportMember.addEventListener("change", (event) => {
@@ -1003,6 +1041,11 @@ function bindReports() {
   }
   document.getElementById("reportStatus")?.addEventListener("change", (event) => {
     ui.reportStatus = event.target.value;
+    render();
+  });
+  document.getElementById("reportSort").addEventListener("change", (event) => {
+    if (ui.activeTab === "salesReport") ui.salesReportSort = event.target.value;
+    else ui.purchaseReportSort = event.target.value;
     render();
   });
   app.querySelectorAll('[data-action="view-sale"]').forEach((button) =>
@@ -1039,67 +1082,46 @@ function reportRowsInExportRange(isSales) {
   const source = isSales ? state.sales : state.purchases;
   const start = ui.exportStart || "0000-01-01";
   const end = ui.exportEnd || "9999-12-31";
-  return source.filter((item) => {
+  const rows = source.filter((item) => {
     const date = item.date.slice(0, 10);
     return item.status !== "cancelled" && date >= start && date <= end;
   });
+  return sortReportTransactions(rows, isSales);
 }
 
-function exportReport(isSales) {
+async function exportReport(isSales) {
+  if (ui.exportStart && ui.exportEnd && ui.exportStart > ui.exportEnd) {
+    throw new Error("Start date must be on or before end date.");
+  }
   const rows = reportRowsInExportRange(isSales);
-  const header = isSales
-    ? ["Document No", "Date", "Member", "Status", "Product", "Unit", "Qty", "Unit Price", "Line Amount", "Unit Cost", "Line Cost", "Profit"]
-    : ["Document No", "Date", "Details", "Status", "Product", "Unit", "Qty", "Unit Cost", "Line Total", "Document Total"];
-  const csvRows = [header];
-
-  rows.forEach((doc) => {
-    if (isSales) {
-      doc.items.forEach((item) => {
-        const lineAmount = item.qty * item.price;
-        const lineCost = item.lineCost || 0;
-        csvRows.push([
-          doc.docNo,
-          doc.date.slice(0, 10),
-          doc.userName,
-          doc.status || "active",
-          item.name,
-          item.unit,
-          item.qty,
-          item.price,
-          lineAmount,
-          item.cost || 0,
-          lineCost,
-          item.profit || lineAmount - lineCost
-        ]);
-      });
-    } else {
-      doc.items.forEach((item) => {
-        csvRows.push([
-          doc.docNo,
-          doc.date.slice(0, 10),
-          doc.details || "",
-          doc.status || "active",
-          item.name,
-          item.unit,
-          item.qty,
-          item.cost,
-          item.lineTotal ?? item.qty * item.cost,
-          doc.totalCost
-        ]);
-      });
-    }
+  const response = await fetch("/api/reports/export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.token}`
+    },
+    body: JSON.stringify({
+      type: isSales ? "sales" : "purchases",
+      documentIds: rows.map((doc) => doc.id),
+      startDate: ui.exportStart,
+      endDate: ui.exportEnd
+    })
   });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) logout(false);
+    throw new Error(payload.error || "Could not export report.");
+  }
 
-  const csv = "\uFEFF" + csvRows.map((row) => row.map(escapeCsv).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const blob = await response.blob();
   const link = document.createElement("a");
   const label = isSales ? "sales-report" : "purchase-report";
   link.href = URL.createObjectURL(blob);
-  link.download = `${label}-${ui.exportStart || "start"}-to-${ui.exportEnd || "end"}.csv`;
+  link.download = `${label}-${ui.exportStart || "start"}-to-${ui.exportEnd || "end"}.xlsx`;
   document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(link.href);
   link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
 function openSaleDetails(id) {
