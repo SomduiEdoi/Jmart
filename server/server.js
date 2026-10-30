@@ -246,12 +246,10 @@ app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => 
       { header: "Price (THB)", key: "price", width: 16, style: { numFmt: "#,##0.00" } },
       { header: "Stock", key: "stock", width: 12 },
       { header: "Minimum Stock", key: "minStock", width: 18 },
-      { header: "Status", key: "status", width: 16 },
-      { header: "Favourite", key: "favourite", width: 14 },
-      { header: "Image URL", key: "image", width: 45 }
+      { header: "Status", key: "status", width: 16 }
     ];
     sheet.getRow(1).font = { bold: true };
-    sheet.autoFilter = "A1:K1";
+    sheet.autoFilter = "A1:I1";
 
     productIds.forEach((productId) => {
       const product = productsById.get(productId);
@@ -264,9 +262,7 @@ app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => 
         price: product.price,
         stock: product.stock,
         minStock: product.minStock,
-        status: product.stock <= 0 ? "Out" : product.stock <= product.minStock ? "Low stock" : "Available",
-        favourite: product.favourite ? "Yes" : "No",
-        image: product.image
+        status: product.stock <= 0 ? "Out" : product.stock <= product.minStock ? "Low stock" : "Available"
       });
     });
 
