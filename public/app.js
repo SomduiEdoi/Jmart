@@ -109,7 +109,7 @@ function stockStatus(product) {
 
 function topSellingIds() {
   const counts = {};
-  state.sales.filter((sale) => sale.status !== "cancelled").forEach((sale) => {
+  state.sales.filter((sale) => sale.status !== "cancelled" && sale.paymentType !== "Expired").forEach((sale) => {
     sale.items.forEach((item) => {
       counts[item.productId] = (counts[item.productId] || 0) + item.qty;
     });
@@ -199,7 +199,7 @@ function renderApp() {
     { id: "categories", label: "Categories", adminOnly: true },
     { id: "members", label: "Members", adminOnly: true },
     { id: "purchaseHistory", label: "Purchase History", adminOnly: false, memberOnly: true },
-    { id: "pos", label: "POS", adminOnly: false }
+    { id: "pos", label: isAdmin() ? "Expired Stock" : "POS", adminOnly: false }
   ].filter((tab) => (!tab.adminOnly || isAdmin()) && (!tab.memberOnly || !isAdmin()));
 
   if (!tabs.some((tab) => tab.id === ui.activeTab)) ui.activeTab = "pos";
@@ -1352,15 +1352,16 @@ async function payUser(id) {
 }
 
 function renderPos() {
+  const expired = isAdmin();
   const selling = topSellingIds();
   const visibleProducts = state.products.filter((product) => product.stock > 0 && (ui.posCategory === "all" || product.categoryId === ui.posCategory));
-  const featured = visibleProducts.filter((product) => product.favourite || selling.includes(product.id));
+  const featured = expired ? [] : visibleProducts.filter((product) => product.favourite || selling.includes(product.id));
   const regular = visibleProducts.filter((product) => !featured.includes(product));
   return `
     <section>
       <div class="section-head">
-        <div><h2>POS</h2><p>Select products and save each checkout as credit for later settlement.</p></div>
-        <div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>
+        <div><h2>${expired ? "Expired Stock" : "POS"}</h2><p>${expired ? "Select expired products and save the quantities to remove from stock." : "Select products and save each checkout as credit for later settlement."}</p></div>
+        ${expired ? "" : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
       </div>
       <div class="pos-grid">
         <div>
@@ -1370,13 +1371,13 @@ function renderPos() {
           </div>
           ${featured.length ? `<h3>Best Sellers / Favourites</h3><div class="product-grid" style="margin:12px 0 22px">${featured.map((product) => productCard(product, selling)).join("")}</div>` : ""}
           <h3>Products</h3>
-          <div class="product-grid" style="margin-top:12px">${regular.map((product) => productCard(product, selling)).join("") || `<div class="empty">No available products</div>`}</div>
+          <div class="product-grid" style="margin-top:12px">${regular.map((product) => productCard(product, selling, expired)).join("") || `<div class="empty">No available products</div>`}</div>
         </div>
         <aside class="panel cart">
-          <h3>Sales Bill</h3>
-          <div class="cart-items">${cart.map(cartRow).join("") || `<div class="empty">Select products from the left</div>`}</div>
-          <div class="cart-total"><span>Total</span><strong>${baht.format(cartTotal())}</strong></div>
-          <button class="btn primary" style="width:100%;margin-top:14px" data-action="checkout" ${cart.length ? "" : "disabled"}>Save as Credit</button>
+          <h3>${expired ? "Expired Items" : "Sales Bill"}</h3>
+          <div class="cart-items">${cart.map((item) => cartRow(item, expired)).join("") || `<div class="empty">Select products from the left</div>`}</div>
+          ${expired ? `<div class="cart-total"><span>Quantity to remove</span><strong>${number.format(cart.reduce((sum, item) => sum + item.qty, 0))}</strong></div><p style="color:var(--muted)">FIFO cost and loss are calculated when saved.</p>` : `<div class="cart-total"><span>Total</span><strong>${baht.format(cartTotal())}</strong></div>`}
+          <button class="btn primary" style="width:100%;margin-top:14px" data-action="checkout" ${cart.length ? "" : "disabled"}>${expired ? "Save Expired Stock" : "Save as Credit"}</button>
         </aside>
       </div>
     </section>`;
@@ -1415,7 +1416,7 @@ function purchaseHistoryRow(sale) {
 
 function bindPurchaseHistory() {}
 
-function productCard(product, selling) {
+function productCard(product, selling, expired = false) {
   return `
     <button class="product-card" data-product="${product.id}">
       <img src="${escapeHtml(product.image)}" alt="" />
@@ -1423,15 +1424,15 @@ function productCard(product, selling) {
       <div class="product-card-body">
         <strong>${escapeHtml(product.name)}</strong>
         <small>${escapeHtml(categoryName(product.categoryId))} • ${number.format(product.stock)} ${escapeHtml(product.unit)} left</small>
-        <strong>${baht.format(product.price)}</strong>
+        ${expired ? "" : `<strong>${baht.format(product.price)}</strong>`}
       </div>
     </button>`;
 }
 
-function cartRow(item) {
+function cartRow(item, expired = false) {
   return `
     <div class="cart-row">
-      <div><strong>${escapeHtml(item.name)}</strong><br><small>${baht.format(item.price)} / ${escapeHtml(item.unit)}</small></div>
+      <div><strong>${escapeHtml(item.name)}</strong><br><small>${expired ? escapeHtml(item.unit) : `${baht.format(item.price)} / ${escapeHtml(item.unit)}`}</small></div>
       <div class="qty"><button class="icon-btn" data-action="dec" data-id="${item.productId}">−</button><strong>${item.qty}</strong><button class="icon-btn" data-action="inc" data-id="${item.productId}">+</button></div>
     </div>`;
 }
@@ -1479,9 +1480,10 @@ function cartTotal() {
 async function checkout() {
   if (!cart.length) return;
   try {
-    const sale = await api("/api/sales", { method: "POST", body: JSON.stringify({ items: cart }) });
+    const expired = isAdmin();
+    const sale = await api(expired ? "/api/expired" : "/api/sales", { method: "POST", body: JSON.stringify({ items: cart.map(({ productId, qty }) => ({ productId, qty })) }) });
     cart = [];
-    alert(`Sale ${sale.docNo} saved as Credit.`);
+    alert(expired ? `Expired stock ${sale.docNo} saved. Cost: ${baht.format(sale.totalCost)}.` : `Sale ${sale.docNo} saved as Credit.`);
     await refresh();
   } catch (error) {
     alert(error.message);

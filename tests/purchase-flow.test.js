@@ -146,6 +146,18 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     assert.ok(Math.abs(salesSheet.getRow(2).getCell(10).value - 11.33 / 3) < 1e-10);
     assert.equal(salesSheet.getRow(2).getCell(11).value, 11.33);
     assert.equal(salesSheet.getRow(2).getCell(12).value, 3.7);
+
+    await request("/api/purchases", "POST", {
+      docNo: "COST-TEST-EXPIRED", date: "2026-11-02", items: [{ productId: product.id, qty: 2, lineTotal: "10.00" }]
+    }, adminToken);
+    const expired = await request("/api/expired", "POST", { items: [{ productId: product.id, qty: 1 }] }, adminToken);
+    assert.deepEqual([expired.total, expired.totalCost, expired.profit, expired.paymentType], [0, 5, -5, "Expired"]);
+    assert.deepEqual(db.prepare("SELECT user_name, total_cents, total_cost_cents, profit_cents, payment_type FROM sales WHERE id = ?").get(expired.id), {
+      user_name: "Admin", total_cents: 0, total_cost_cents: 500, profit_cents: -500, payment_type: "Expired"
+    });
+    assert.equal(db.prepare("SELECT stock FROM products WHERE id = ?").get(product.id).stock, 1);
+    await request(`/api/sales/${expired.id}/cancel`, "POST", {}, adminToken);
+    assert.equal(db.prepare("SELECT stock FROM products WHERE id = ?").get(product.id).stock, 2);
   } finally {
     db?.close();
     if (child.exitCode == null && child.signalCode == null) {

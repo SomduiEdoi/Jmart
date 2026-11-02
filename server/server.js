@@ -141,7 +141,7 @@ function purchases() {
 
 function nextDocumentNumber(type) {
   const ymd = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const table = type === "SO" ? "sales" : "purchases";
+  const table = type === "PO" ? "purchases" : "sales";
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE doc_no LIKE ?`).get(`${type}-${ymd}-%`);
   return `${type}-${ymd}-${String(row.count + 1).padStart(4, "0")}`;
 }
@@ -651,6 +651,60 @@ app.post("/api/sales", requireAuth, (req, res) => {
       return { id: saleId, docNo, date, totalQty, total, totalCost, profit, paymentType: "Credit" };
     })(req.body.items);
     res.status(201).json(sale);
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+app.post("/api/expired", requireAuth, requireAdmin, (req, res) => {
+  try {
+    const result = db.transaction((items) => {
+      if (!Array.isArray(items) || !items.length) throw new Error("Expired items are required.");
+      const prepared = items.map((item) => {
+        const product = db.prepare("SELECT * FROM products WHERE id = ?").get(item.productId);
+        if (!product) throw new Error("Product not found.");
+        const qty = assertNumber(item.qty, "Quantity", 1);
+        if (!Number.isSafeInteger(qty)) throw new Error("Quantity must be a whole number.");
+        return { product, qty };
+      });
+      const lotState = new Map();
+      const costed = prepared.map((item) => {
+        const lots = consumeFifoLots(item.product.id, item.qty, lotState);
+        const lineCostCents = lots.reduce((sum, lot) => sum + lot.lineCostCents, 0);
+        return { ...item, lots, lineCostCents };
+      });
+      const totalQty = costed.reduce((sum, item) => sum + item.qty, 0);
+      const totalCostCents = costed.reduce((sum, item) => sum + item.lineCostCents, 0);
+      if (!Number.isSafeInteger(totalCostCents)) throw new Error("Expired cost is too large.");
+      const saleId = id("ex");
+      const docNo = nextDocumentNumber("EX");
+      const date = new Date().toISOString();
+      db.prepare(`INSERT INTO sales
+        (id, doc_no, date, user_id, user_name, total_qty, total, total_cents, total_cost, total_cost_cents, profit, profit_cents, payment_type)
+        VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'Expired')`).run(
+        saleId, docNo, date, req.user.id, req.user.name, totalQty,
+        totalCostCents / 100, totalCostCents, -totalCostCents / 100, -totalCostCents
+      );
+      const insertItem = db.prepare(`INSERT INTO sale_items
+        (id, sale_id, product_id, name, unit, price, qty, line_revenue_cents, cost, line_cost, line_cost_cents, profit, profit_cents)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?)`);
+      const insertSaleLot = db.prepare("INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost, line_cost_cents) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ?, remaining_cost_cents = remaining_cost_cents - ? WHERE id = ?");
+      const removeStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
+      costed.forEach((item) => {
+        const saleItemId = id("exi");
+        const lineCost = item.lineCostCents / 100;
+        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit,
+          item.qty, lineCost / item.qty, lineCost, item.lineCostCents, -lineCost, -item.lineCostCents);
+        item.lots.forEach((consumed) => {
+          insertSaleLot.run(id("sil"), saleItemId, consumed.lot.id, consumed.qty, consumed.cost, consumed.lineCost, consumed.lineCostCents);
+          updateLot.run(consumed.qty, consumed.lineCostCents, consumed.lot.id);
+        });
+        removeStock.run(item.qty, item.product.id);
+      });
+      return { id: saleId, docNo, date, totalQty, total: 0, totalCost: totalCostCents / 100, profit: -totalCostCents / 100, paymentType: "Expired" };
+    })(req.body.items);
+    res.status(201).json(result);
   } catch (error) {
     handleError(res, error);
   }

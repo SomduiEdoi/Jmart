@@ -45,6 +45,7 @@ Data is stored in:
 - Sales consume inventory lots in FIFO order. Any remaining satang is assigned to the last units sold from that lot, so the lot's allocated costs add up to its original purchase amount.
 - The sale price remains the value configured in Products. Saving a purchase does not change it. A sale's gross profit is its sale amount minus the FIFO cost of the units actually sold.
 - Stock already on hand is sold from its older lots before a new purchase lot. Existing sales keep their recorded prices, costs, and profits.
+- The Admin's Expired Stock page removes expired units through FIFO and records a Sales Report document under Admin with zero revenue, the consumed cost, and an equal negative gross profit. Cancelling that document restores stock and FIFO cost.
 
 ## Production Install
 
