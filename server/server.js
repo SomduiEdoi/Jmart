@@ -365,6 +365,34 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
       });
     });
 
+    if (isSales) {
+      const totalsByMember = new Map();
+      documentIds.forEach((documentId) => {
+        const document = documentsById.get(documentId);
+        if (!totalsByMember.has(document.userId)) {
+          totalsByMember.set(document.userId, { name: document.userName, qty: 0, amountCents: 0 });
+        }
+        const total = totalsByMember.get(document.userId);
+        total.qty += document.totalQty;
+        total.amountCents += roundedCents(document.total);
+      });
+      const memberSheet = workbook.addWorksheet("Member Purchase Summary", {
+        views: [{ state: "frozen", ySplit: 1 }]
+      });
+      memberSheet.columns = [
+        { header: "Member", width: 28 },
+        { header: "Quantity", width: 16 },
+        { header: "Amount", width: 20 }
+      ];
+      memberSheet.getRow(1).font = { bold: true };
+      memberSheet.autoFilter = "A1:C1";
+      memberSheet.getColumn(2).numFmt = "#,##0";
+      memberSheet.getColumn(3).numFmt = "#,##0.00";
+      [...totalsByMember.values()]
+        .sort((a, b) => b.amountCents - a.amountCents)
+        .forEach((member) => memberSheet.addRow([member.name, member.qty, member.amountCents / 100]));
+    }
+
     const buffer = await workbook.xlsx.writeBuffer();
     const filename = `${isSales ? "sales-report" : "purchase-report"}-${startDate || "start"}-to-${endDate || "end"}.xlsx`;
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

@@ -157,7 +157,7 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     const reportResponse = await fetch(`${baseUrl}/api/reports/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ type: "sales", documentIds: [crossLotSale.id], startDate: "", endDate: "" })
+      body: JSON.stringify({ type: "sales", documentIds: [crossLotSale.id, finalSale.id], startDate: "", endDate: "" })
     });
     assert.equal(reportResponse.ok, true);
     const salesWorkbook = new ExcelJS.Workbook();
@@ -168,6 +168,10 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     assert.ok(Math.abs(salesSheet.getRow(2).getCell(10).value - 11.33 / 3) < 1e-10);
     assert.equal(salesSheet.getRow(2).getCell(11).value, 11.33);
     assert.equal(salesSheet.getRow(2).getCell(12).value, 3.7);
+    const memberSheet = salesWorkbook.getWorksheet("Member Purchase Summary");
+    assert.deepEqual(memberSheet.getRow(1).values.slice(1), ["Member", "Quantity", "Amount"]);
+    assert.deepEqual(memberSheet.getRow(2).values.slice(1), ["Somchai", 5, 25.05]);
+    assert.equal(memberSheet.getColumn(3).numFmt, "#,##0.00");
 
     await request("/api/purchases", "POST", {
       docNo: "COST-TEST-EXPIRED", date: "2026-11-02", items: [{ productId: product.id, qty: 2, lineTotal: "10.00" }]
@@ -178,6 +182,15 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
       user_name: "Admin", total_cents: 0, total_cost_cents: 500, profit_cents: -500, payment_type: "Expired"
     });
     assert.equal(db.prepare("SELECT stock FROM products WHERE id = ?").get(product.id).stock, 1);
+    const expiredExport = await fetch(`${baseUrl}/api/reports/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ type: "sales", documentIds: [expired.id], startDate: "", endDate: "" })
+    });
+    assert.equal(expiredExport.ok, true);
+    const expiredWorkbook = new ExcelJS.Workbook();
+    await expiredWorkbook.xlsx.load(Buffer.from(await expiredExport.arrayBuffer()));
+    assert.deepEqual(expiredWorkbook.getWorksheet("Member Purchase Summary").getRow(2).values.slice(1), ["Admin", 1, 0]);
     await request(`/api/sales/${expired.id}/cancel`, "POST", {}, adminToken);
     assert.equal(db.prepare("SELECT stock FROM products WHERE id = ?").get(product.id).stock, 2);
   } finally {
