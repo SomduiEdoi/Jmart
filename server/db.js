@@ -18,6 +18,11 @@ function id(prefix) {
 
 function initDb() {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -131,6 +136,7 @@ function initDb() {
       line_cost_cents INTEGER
     );
   `);
+  db.prepare("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('member_sales_open', '1')").run();
 
   const saleColumns = db.prepare("PRAGMA table_info(sales)").all().map((column) => column.name);
   const addedSaleTotalCost = !saleColumns.includes("total_cost");

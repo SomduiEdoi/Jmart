@@ -171,12 +171,23 @@ app.get("/api/bootstrap", optionalAuth, (req, res) => {
   const admin = req.user?.role === "admin";
   res.json({
     currentUser: req.user || null,
+    memberSalesOpen: memberSalesOpen(),
     users: memberList(!admin),
     categories: categories(),
     products: products(),
     sales: admin ? sales() : sales().filter((sale) => sale.userId === req.user?.id),
     purchases: admin ? purchases() : []
   });
+});
+
+function memberSalesOpen() {
+  return db.prepare("SELECT value FROM app_settings WHERE key = 'member_sales_open'").get()?.value !== '0';
+}
+
+app.put("/api/settings/member-sales", requireAuth, requireAdmin, (req, res) => {
+  if (typeof req.body.open !== "boolean") return res.status(400).json({ error: "Open must be true or false." });
+  db.prepare("UPDATE app_settings SET value = ? WHERE key = 'member_sales_open'").run(req.body.open ? '1' : '0');
+  res.json({ memberSalesOpen: memberSalesOpen() });
 });
 
 app.post("/api/login", (req, res) => {
@@ -602,6 +613,7 @@ app.post("/api/sales", requireAuth, (req, res) => {
   try {
     if (req.user.role !== "member") throw new Error("Please sign in as a member to save an outstanding credit balance.");
     const sale = db.transaction((items) => {
+      if (!memberSalesOpen()) return null;
       if (!Array.isArray(items) || items.length === 0) throw new Error("Sale items are required.");
       const prepared = items.map((item) => {
         const product = db.prepare("SELECT * FROM products WHERE id = ?").get(item.productId);
@@ -650,6 +662,7 @@ app.post("/api/sales", requireAuth, (req, res) => {
       db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(total, req.user.id);
       return { id: saleId, docNo, date, totalQty, total, totalCost, profit, paymentType: "Credit" };
     })(req.body.items);
+    if (!sale) return res.status(403).json({ error: "Member sales are closed for the cutoff. Please try again after Admin reopens them." });
     res.status(201).json(sale);
   } catch (error) {
     handleError(res, error);

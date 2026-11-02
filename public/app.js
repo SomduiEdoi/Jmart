@@ -17,6 +17,7 @@ const ui = {
 const state = {
   token: localStorage.getItem(TOKEN_KEY),
   currentUser: null,
+  memberSalesOpen: true,
   users: [],
   categories: [],
   products: [],
@@ -62,6 +63,7 @@ async function api(path, options = {}) {
 async function loadData() {
   const data = await api("/api/bootstrap");
   state.currentUser = data.currentUser;
+  state.memberSalesOpen = data.memberSalesOpen !== false;
   state.users = data.users || [];
   state.categories = data.categories || [];
   state.products = data.products || [];
@@ -1353,6 +1355,7 @@ async function payUser(id) {
 
 function renderPos() {
   const expired = isAdmin();
+  const memberClosed = !expired && !state.memberSalesOpen;
   const selling = topSellingIds();
   const visibleProducts = state.products.filter((product) => product.stock > 0 && (ui.posCategory === "all" || product.categoryId === ui.posCategory));
   const featured = expired ? [] : visibleProducts.filter((product) => product.favourite || selling.includes(product.id));
@@ -1361,8 +1364,9 @@ function renderPos() {
     <section>
       <div class="section-head">
         <div><h2>${expired ? "Expired Stock" : "POS"}</h2><p>${expired ? "Select expired products and save the quantities to remove from stock." : "Select products and save each checkout as credit for later settlement."}</p></div>
-        ${expired ? "" : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
+        ${expired ? `<div class="metric" style="min-width:250px"><span>Member sales</span><strong>${state.memberSalesOpen ? "Open" : "Closed"}</strong><button class="btn ${state.memberSalesOpen ? "danger" : "primary"}" data-action="toggle-member-sales" style="margin-top:10px">${state.memberSalesOpen ? "Close member sales" : "Open member sales"}</button></div>` : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
       </div>
+      ${memberClosed ? `<div class="panel" role="status" style="margin-bottom:16px">Member sales are temporarily closed for the cutoff. You can view your history, but cannot save a new sale until Admin reopens them.</div>` : ""}
       <div class="pos-grid">
         <div>
           <div class="category-strip">
@@ -1377,7 +1381,7 @@ function renderPos() {
           <h3>${expired ? "Expired Items" : "Sales Bill"}</h3>
           <div class="cart-items">${cart.map((item) => cartRow(item, expired)).join("") || `<div class="empty">Select products from the left</div>`}</div>
           ${expired ? `<div class="cart-total"><span>Quantity to remove</span><strong>${number.format(cart.reduce((sum, item) => sum + item.qty, 0))}</strong></div><p style="color:var(--muted)">FIFO cost and loss are calculated when saved.</p>` : `<div class="cart-total"><span>Total</span><strong>${baht.format(cartTotal())}</strong></div>`}
-          <button class="btn primary" style="width:100%;margin-top:14px" data-action="checkout" ${cart.length ? "" : "disabled"}>${expired ? "Save Expired Stock" : "Save as Credit"}</button>
+          <button class="btn primary" style="width:100%;margin-top:14px" data-action="checkout" ${cart.length && !memberClosed ? "" : "disabled"}>${expired ? "Save Expired Stock" : "Save as Credit"}</button>
         </aside>
       </div>
     </section>`;
@@ -1418,7 +1422,7 @@ function bindPurchaseHistory() {}
 
 function productCard(product, selling, expired = false) {
   return `
-    <button class="product-card" data-product="${product.id}">
+    <button class="product-card" data-product="${product.id}" ${!expired && !state.memberSalesOpen ? "disabled" : ""}>
       <img src="${escapeHtml(product.image)}" alt="" />
       <div class="badges">${selling.includes(product.id) ? `<span class="badge" title="Best seller">↗</span>` : ""}${product.favourite ? `<span class="badge fav" title="Favourite">★</span>` : ""}</div>
       <div class="product-card-body">
@@ -1433,7 +1437,7 @@ function cartRow(item, expired = false) {
   return `
     <div class="cart-row">
       <div><strong>${escapeHtml(item.name)}</strong><br><small>${expired ? escapeHtml(item.unit) : `${baht.format(item.price)} / ${escapeHtml(item.unit)}`}</small></div>
-      <div class="qty"><button class="icon-btn" data-action="dec" data-id="${item.productId}">−</button><strong>${item.qty}</strong><button class="icon-btn" data-action="inc" data-id="${item.productId}">+</button></div>
+      <div class="qty"><button class="icon-btn" data-action="dec" data-id="${item.productId}" ${!expired && !state.memberSalesOpen ? "disabled" : ""}>−</button><strong>${item.qty}</strong><button class="icon-btn" data-action="inc" data-id="${item.productId}" ${!expired && !state.memberSalesOpen ? "disabled" : ""}>+</button></div>
     </div>`;
 }
 
@@ -1451,8 +1455,22 @@ function bindPos() {
       if (action === "inc") addToCart(button.dataset.id);
       if (action === "dec") decrementCart(button.dataset.id);
       if (action === "checkout") checkout();
+      if (action === "toggle-member-sales") toggleMemberSales();
     })
   );
+}
+
+async function toggleMemberSales() {
+  try {
+    const result = await api("/api/settings/member-sales", {
+      method: "PUT",
+      body: JSON.stringify({ open: !state.memberSalesOpen })
+    });
+    state.memberSalesOpen = result.memberSalesOpen;
+    render();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 function addToCart(productId) {

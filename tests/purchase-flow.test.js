@@ -80,6 +80,28 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     assert.equal(purchaseItem.line_total_cents, 1000);
     assert.ok(Math.abs(purchaseItem.cost - 10 / 3) < 1e-10);
 
+    assert.equal((await request("/api/bootstrap", "GET", undefined, memberToken)).memberSalesOpen, true);
+    assert.equal((await request("/api/settings/member-sales", "PUT", { open: false }, adminToken)).memberSalesOpen, false);
+    assert.equal(db.prepare("SELECT value FROM app_settings WHERE key = 'member_sales_open'").get().value, "0");
+    assert.equal((await request("/api/bootstrap", "GET", undefined, memberToken)).memberSalesOpen, false);
+    const blockedSale = await fetch(`${baseUrl}/api/sales`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${memberToken}` },
+      body: JSON.stringify({ items: [{ productId: product.id, qty: 1 }] })
+    });
+    assert.equal(blockedSale.status, 403);
+    assert.match((await blockedSale.json()).error, /closed/i);
+    assert.equal(db.prepare("SELECT stock FROM products WHERE id = ?").get(product.id).stock, 3);
+    const blockedToggle = await fetch(`${baseUrl}/api/settings/member-sales`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${memberToken}` },
+      body: JSON.stringify({ open: true })
+    });
+    assert.equal(blockedToggle.status, 403);
+    const adminExpiredWhileClosed = await request("/api/expired", "POST", { items: [{ productId: product.id, qty: 1 }] }, adminToken);
+    await request(`/api/sales/${adminExpiredWhileClosed.id}/cancel`, "POST", {}, adminToken);
+    assert.equal((await request("/api/settings/member-sales", "PUT", { open: true }, adminToken)).memberSalesOpen, true);
+
     const sales = [];
     for (let i = 0; i < 3; i += 1) {
       sales.push(await request("/api/sales", "POST", { items: [{ productId: product.id, qty: 1 }] }, memberToken));
