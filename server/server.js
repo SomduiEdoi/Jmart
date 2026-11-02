@@ -331,7 +331,6 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
     for (let column = 8; column <= columns.length; column += 1) {
       sheet.getColumn(column).numFmt = "#,##0.00";
     }
-    sheet.getColumn(isSales ? 10 : 8).numFmt = "#,##0.000000";
 
     documentIds.forEach((documentId) => {
       const document = documentsById.get(documentId);

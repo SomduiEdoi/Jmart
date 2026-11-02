@@ -142,7 +142,7 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     await salesWorkbook.xlsx.load(Buffer.from(await reportResponse.arrayBuffer()));
     const salesSheet = salesWorkbook.getWorksheet("Sales Report");
     assert.equal(salesSheet.getRow(1).getCell(10).value, "Unit Cost (avg.)");
-    assert.equal(salesSheet.getColumn(10).numFmt, "#,##0.000000");
+    assert.equal(salesSheet.getColumn(10).numFmt, "#,##0.00");
     assert.ok(Math.abs(salesSheet.getRow(2).getCell(10).value - 11.33 / 3) < 1e-10);
     assert.equal(salesSheet.getRow(2).getCell(11).value, 11.33);
     assert.equal(salesSheet.getRow(2).getCell(12).value, 3.7);

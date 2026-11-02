@@ -29,7 +29,7 @@ let productSearchTimer = null;
 
 const app = document.getElementById("app");
 const baht = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" });
-const averageUnitCost = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", minimumFractionDigits: 2, maximumFractionDigits: 6 });
+const averageUnitCost = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat("th-TH");
 const PRODUCT_PAGE_SIZE = 50;
 
