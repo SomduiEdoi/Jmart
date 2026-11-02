@@ -629,6 +629,41 @@ tr:last-child td {
   min-width: 0;
 }
 
+.member-sales-closed {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 15px 18px;
+  border: 1px solid #e9b867;
+  border-left: 5px solid #c47b12;
+  border-radius: 10px;
+  background: #fff7e8;
+  color: #663d05;
+}
+
+.member-sales-closed-icon {
+  display: grid;
+  flex: 0 0 24px;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #c47b12;
+  color: white;
+  font-weight: 700;
+}
+
+.member-sales-closed strong {
+  display: block;
+  font-size: 16px;
+}
+
+.member-sales-closed p {
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+
 .member-sales-heading,
 .member-sales-control {
   display: flex;

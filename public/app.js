@@ -1366,7 +1366,7 @@ function renderPos() {
         <div><h2>${expired ? "Expired Stock" : "POS"}</h2><p>${expired ? "Select expired products and save the quantities to remove from stock." : "Select products and save each checkout as credit for later settlement."}</p></div>
         ${expired ? "" : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
       </div>
-      ${memberClosed ? `<div class="panel" role="status" style="margin-bottom:16px">Member sales are temporarily closed for the cutoff. You can view your history, but cannot save a new sale until Admin reopens them.</div>` : ""}
+      ${memberClosed ? `<div class="member-sales-closed" role="status"><span class="member-sales-closed-icon" aria-hidden="true">!</span><div><strong>Member sales are temporarily closed</strong><p>You can view your history, but cannot save a new sale until Admin reopens member sales after the cutoff.</p></div></div>` : ""}
       <div class="pos-grid">
         <div>
           <div class="category-strip">
