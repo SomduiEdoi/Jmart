@@ -29,6 +29,7 @@ let productSearchTimer = null;
 
 const app = document.getElementById("app");
 const baht = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" });
+const averageUnitCost = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", minimumFractionDigits: 2, maximumFractionDigits: 6 });
 const number = new Intl.NumberFormat("th-TH");
 const PRODUCT_PAGE_SIZE = 50;
 
@@ -551,11 +552,10 @@ async function exportProducts(button) {
 
 function openPurchaseModal() {
   const today = new Date().toISOString().slice(0, 10);
-  const emptyPurchaseItem = () => ({ productId: "", qty: "", cost: "" });
+  const emptyPurchaseItem = () => ({ productId: "", qty: "", lineTotal: "" });
   const draft = {
     docNo: "",
     date: today,
-    details: "",
     items: [emptyPurchaseItem()]
   };
   openModal(`
@@ -563,15 +563,14 @@ function openPurchaseModal() {
     <form id="purchaseForm" class="form-grid">
       <label class="field"><span>Document No.</span><input id="purchaseDocNo" name="docNo" placeholder="Enter document number" required /></label>
       <label class="field"><span>Date</span><input id="purchaseDate" name="date" type="date" value="${today}" required /></label>
-      <label class="field full"><span>Details</span><textarea id="purchaseDetails" name="details" rows="3" placeholder="Enter document details"></textarea></label>
       <div class="field full">
         <div class="section-head" style="margin-bottom:12px">
-          <div><h3 style="margin:0">Items</h3><p>Add one or more products with qty and unit cost.</p></div>
+          <div><h3 style="margin:0">Items</h3><p>Enter quantity and the amount paid for each product. Unit cost is calculated automatically.</p></div>
           <button class="btn" type="button" id="addPurchaseRow">Add Item</button>
         </div>
         <div class="list">
           <table>
-            <thead><tr><th>Product</th><th>Qty</th><th>Unit Cost</th><th>Line Total</th><th></th></tr></thead>
+            <thead><tr><th>Product</th><th>Qty</th><th>Unit Cost (avg.)</th><th>Line Total</th><th></th></tr></thead>
             <tbody id="purchaseItemsBody"></tbody>
           </table>
           <datalist id="purchaseProductOptions"></datalist>
@@ -588,13 +587,19 @@ function openPurchaseModal() {
   const body = document.getElementById("purchaseItemsBody");
   const docNoInput = document.getElementById("purchaseDocNo");
   const dateInput = document.getElementById("purchaseDate");
-  const detailsInput = document.getElementById("purchaseDetails");
   const totalQtyEl = document.getElementById("purchaseTotalQty");
   const grandTotalEl = document.getElementById("purchaseGrandTotal");
   const productOptionsEl = document.getElementById("purchaseProductOptions");
 
-  function lineTotal(item) {
-    return Number(item.qty || 0) * Number(item.cost || 0);
+  function lineTotalCents(item) {
+    const value = String(item.lineTotal || "").trim();
+    if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return 0;
+    return Math.round(Number(value) * 100);
+  }
+
+  function unitCost(item) {
+    const qty = Number(item.qty);
+    return Number.isInteger(qty) && qty > 0 ? lineTotalCents(item) / 100 / qty : 0;
   }
 
   function productLabel(product) {
@@ -623,13 +628,12 @@ function openPurchaseModal() {
     return matches.length === 1 ? matches[0] : null;
   }
 
-  function updatePurchaseRow(index, updateCostInput = false) {
+  function updatePurchaseRow(index) {
     const item = draft.items[index];
     const row = body.querySelector(`[data-purchase-row="${index}"]`);
     if (!row) return;
-    if (updateCostInput) row.querySelector('[data-purchase-field="cost"]').value = item.cost;
     row.querySelector("[data-purchase-product-meta]").textContent = purchaseProductMeta(item.productId);
-    row.querySelector("[data-purchase-line-total]").textContent = baht.format(lineTotal(item));
+    row.querySelector("[data-purchase-unit-cost]").textContent = averageUnitCost.format(unitCost(item));
   }
 
   function purchaseProductMeta(productId) {
@@ -640,9 +644,9 @@ function openPurchaseModal() {
 
   function syncSummary() {
     const totalQty = draft.items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-    const totalAmount = draft.items.reduce((sum, item) => sum + lineTotal(item), 0);
+    const totalCents = draft.items.reduce((sum, item) => sum + lineTotalCents(item), 0);
     totalQtyEl.textContent = number.format(totalQty);
-    grandTotalEl.textContent = baht.format(totalAmount);
+    grandTotalEl.textContent = baht.format(totalCents / 100);
   }
 
   function renderRows() {
@@ -658,8 +662,8 @@ function openPurchaseModal() {
               </div>
             </td>
             <td><input data-purchase-field="qty" data-index="${index}" type="number" min="1" step="1" value="${item.qty}" placeholder="Qty" /></td>
-            <td><input data-purchase-field="cost" data-index="${index}" type="number" min="0" step="0.01" value="${item.cost}" placeholder="Unit cost" /></td>
-            <td data-purchase-line-total>${baht.format(lineTotal(item))}</td>
+            <td data-purchase-unit-cost>${averageUnitCost.format(unitCost(item))}</td>
+            <td><input data-purchase-field="lineTotal" data-index="${index}" type="number" min="0" step="0.01" value="${item.lineTotal}" placeholder="Line total" required /></td>
             <td class="row-action-cell"><button class="icon-action danger" type="button" data-purchase-remove="${index}" title="Remove item" aria-label="Remove item" ${draft.items.length === 1 ? "disabled" : ""}>×</button></td>
           </tr>`
       )
@@ -670,13 +674,10 @@ function openPurchaseModal() {
         const field = event.target.dataset.purchaseField;
         if (field === "productSearch") {
           const product = findPurchaseProduct(event.target.value);
-          if (product) {
-            draft.items[index].productId = product.id;
-            draft.items[index].cost = product.cost;
-            updatePurchaseRow(index, true);
-          }
+          draft.items[index].productId = product?.id || "";
+          updatePurchaseRow(index);
         } else {
-          draft.items[index][field] = Number(event.target.value || 0);
+          draft.items[index][field] = event.target.value;
           updatePurchaseRow(index);
         }
         syncSummary();
@@ -704,20 +705,19 @@ function openPurchaseModal() {
   document.getElementById("purchaseForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const items = draft.items
-        .map((item) => ({
-          productId: item.productId,
-          qty: Number(item.qty || 0),
-          cost: Number(item.cost || 0)
-        }))
-        .filter((item) => item.productId && item.qty > 0);
-      if (!items.length) return alert("Please select at least one product and enter its quantity.");
+      const items = draft.items.map((item) => ({
+        productId: item.productId,
+        qty: Number(item.qty),
+        lineTotal: String(item.lineTotal || "").trim()
+      }));
+      if (items.some((item) => !item.productId || !Number.isSafeInteger(item.qty) || item.qty < 1 || !/^\d+(?:\.\d{1,2})?$/.test(item.lineTotal))) {
+        throw new Error("Select a product, enter a whole quantity, and enter a line total with at most two decimal places for each row.");
+      }
       await api("/api/purchases", {
         method: "POST",
         body: JSON.stringify({
           docNo: docNoInput.value.trim(),
           date: dateInput.value,
-          details: detailsInput.value.trim(),
           items
         })
       });
@@ -798,9 +798,9 @@ function openPurchaseDetails(id) {
       <h3>Items</h3>
       <div class="list" style="margin-top:12px">
         <table>
-          <thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit Cost</th><th>Line Total</th></tr></thead>
+          <thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit Cost (avg.)</th><th>Line Total</th></tr></thead>
           <tbody>
-            ${purchase.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.cost)}</td><td>${baht.format(item.lineTotal ?? item.qty * item.cost)}</td></tr>`).join("")}
+            ${purchase.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${averageUnitCost.format(item.cost)}</td><td>${baht.format(item.lineTotal ?? item.qty * item.cost)}</td></tr>`).join("")}
           </tbody>
         </table>
       </div>

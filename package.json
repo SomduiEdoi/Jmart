@@ -5,7 +5,8 @@
   "description": "J-Mart employee welfare POS with Express and SQLite",
   "scripts": {
     "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev": "node server/server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

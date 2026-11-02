@@ -3,6 +3,7 @@ const path = require("node:path");
 const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
 const crypto = require("node:crypto");
+const { roundedCents } = require("./money");
 
 const databaseFile = process.env.DATABASE_FILE || path.join(__dirname, "..", "data", "jmart.sqlite");
 fs.mkdirSync(path.dirname(databaseFile), { recursive: true });
@@ -55,6 +56,7 @@ function initDb() {
       total_qty INTEGER NOT NULL,
       total REAL NOT NULL,
       total_cost REAL NOT NULL DEFAULT 0,
+      total_cost_cents INTEGER,
       profit REAL NOT NULL DEFAULT 0,
       payment_type TEXT NOT NULL DEFAULT 'Credit',
       status TEXT NOT NULL DEFAULT 'active',
@@ -72,6 +74,7 @@ function initDb() {
       qty INTEGER NOT NULL,
       cost REAL NOT NULL DEFAULT 0,
       line_cost REAL NOT NULL DEFAULT 0,
+      line_cost_cents INTEGER,
       profit REAL NOT NULL DEFAULT 0
     );
 
@@ -84,7 +87,8 @@ function initDb() {
       cancelled_at TEXT,
       cancelled_by TEXT,
       total_qty INTEGER NOT NULL,
-      total_cost REAL NOT NULL
+      total_cost REAL NOT NULL,
+      total_cost_cents INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS purchase_items (
@@ -95,7 +99,8 @@ function initDb() {
       qty INTEGER NOT NULL,
       unit TEXT NOT NULL DEFAULT '',
       cost REAL NOT NULL,
-      line_total REAL NOT NULL DEFAULT 0
+      line_total REAL NOT NULL DEFAULT 0,
+      line_total_cents INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS inventory_lots (
@@ -107,6 +112,8 @@ function initDb() {
       qty INTEGER NOT NULL,
       remaining_qty INTEGER NOT NULL,
       cost REAL NOT NULL,
+      total_cost_cents INTEGER,
+      remaining_cost_cents INTEGER,
       status TEXT NOT NULL DEFAULT 'active'
     );
 
@@ -116,15 +123,17 @@ function initDb() {
       lot_id TEXT NOT NULL REFERENCES inventory_lots(id),
       qty INTEGER NOT NULL,
       cost REAL NOT NULL,
-      line_cost REAL NOT NULL
+      line_cost REAL NOT NULL,
+      line_cost_cents INTEGER
     );
   `);
 
   const saleColumns = db.prepare("PRAGMA table_info(sales)").all().map((column) => column.name);
+  const addedSaleTotalCost = !saleColumns.includes("total_cost");
   if (!saleColumns.includes("status")) {
     db.prepare("ALTER TABLE sales ADD COLUMN status TEXT NOT NULL DEFAULT 'active'").run();
   }
-  if (!saleColumns.includes("total_cost")) {
+  if (addedSaleTotalCost) {
     db.prepare("ALTER TABLE sales ADD COLUMN total_cost REAL NOT NULL DEFAULT 0").run();
   }
   if (!saleColumns.includes("profit")) {
@@ -136,16 +145,23 @@ function initDb() {
   if (!saleColumns.includes("cancelled_by")) {
     db.prepare("ALTER TABLE sales ADD COLUMN cancelled_by TEXT").run();
   }
+  if (!saleColumns.includes("total_cost_cents")) {
+    db.prepare("ALTER TABLE sales ADD COLUMN total_cost_cents INTEGER").run();
+  }
 
   const saleItemColumns = db.prepare("PRAGMA table_info(sale_items)").all().map((column) => column.name);
+  const addedSaleLineCost = !saleItemColumns.includes("line_cost");
   if (!saleItemColumns.includes("cost")) {
     db.prepare("ALTER TABLE sale_items ADD COLUMN cost REAL NOT NULL DEFAULT 0").run();
   }
-  if (!saleItemColumns.includes("line_cost")) {
+  if (addedSaleLineCost) {
     db.prepare("ALTER TABLE sale_items ADD COLUMN line_cost REAL NOT NULL DEFAULT 0").run();
   }
   if (!saleItemColumns.includes("profit")) {
     db.prepare("ALTER TABLE sale_items ADD COLUMN profit REAL NOT NULL DEFAULT 0").run();
+  }
+  if (!saleItemColumns.includes("line_cost_cents")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN line_cost_cents INTEGER").run();
   }
 
   const purchaseColumns = db.prepare("PRAGMA table_info(purchases)").all().map((column) => column.name);
@@ -161,6 +177,9 @@ function initDb() {
   if (!purchaseColumns.includes("cancelled_by")) {
     db.prepare("ALTER TABLE purchases ADD COLUMN cancelled_by TEXT").run();
   }
+  if (!purchaseColumns.includes("total_cost_cents")) {
+    db.prepare("ALTER TABLE purchases ADD COLUMN total_cost_cents INTEGER").run();
+  }
 
   const purchaseItemColumns = db.prepare("PRAGMA table_info(purchase_items)").all().map((column) => column.name);
   if (!purchaseItemColumns.includes("unit")) {
@@ -170,19 +189,63 @@ function initDb() {
     db.prepare("ALTER TABLE purchase_items ADD COLUMN line_total REAL NOT NULL DEFAULT 0").run();
     db.prepare("UPDATE purchase_items SET line_total = qty * cost WHERE line_total = 0").run();
   }
+  if (!purchaseItemColumns.includes("line_total_cents")) {
+    db.prepare("ALTER TABLE purchase_items ADD COLUMN line_total_cents INTEGER").run();
+  }
 
+  const lotColumns = db.prepare("PRAGMA table_info(inventory_lots)").all().map((column) => column.name);
+  if (!lotColumns.includes("total_cost_cents")) {
+    db.prepare("ALTER TABLE inventory_lots ADD COLUMN total_cost_cents INTEGER").run();
+  }
+  if (!lotColumns.includes("remaining_cost_cents")) {
+    db.prepare("ALTER TABLE inventory_lots ADD COLUMN remaining_cost_cents INTEGER").run();
+  }
+  const saleLotColumns = db.prepare("PRAGMA table_info(sale_item_lots)").all().map((column) => column.name);
+  if (!saleLotColumns.includes("line_cost_cents")) {
+    db.prepare("ALTER TABLE sale_item_lots ADD COLUMN line_cost_cents INTEGER").run();
+  }
+
+  if (addedSaleLineCost) {
+    db.prepare(`
+      UPDATE sale_items
+      SET cost = COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
+          line_cost = qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
+          profit = (qty * price) - (qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0))
+    `).run();
+  }
+  if (addedSaleTotalCost) {
+    db.prepare(`
+      UPDATE sales
+      SET total_cost = COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0),
+          profit = total - COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0)
+    `).run();
+  }
+
+  db.prepare("UPDATE sale_items SET line_cost_cents = CAST(ROUND(line_cost * 100) AS INTEGER) WHERE line_cost_cents IS NULL").run();
+  db.prepare("UPDATE sales SET total_cost_cents = CAST(ROUND(total_cost * 100) AS INTEGER) WHERE total_cost_cents IS NULL").run();
+  db.prepare("UPDATE purchase_items SET line_total_cents = CAST(ROUND(line_total * 100) AS INTEGER) WHERE line_total_cents IS NULL").run();
+  db.prepare("UPDATE purchases SET total_cost_cents = CAST(ROUND(total_cost * 100) AS INTEGER) WHERE total_cost_cents IS NULL").run();
+  db.prepare("UPDATE sale_item_lots SET line_cost_cents = CAST(ROUND(line_cost * 100) AS INTEGER) WHERE line_cost_cents IS NULL").run();
   db.prepare(`
-    UPDATE sale_items
-    SET cost = COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
-        line_cost = qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0),
-        profit = (qty * price) - (qty * COALESCE((SELECT products.cost FROM products WHERE products.id = sale_items.product_id), 0))
-    WHERE line_cost = 0
+    UPDATE inventory_lots
+    SET total_cost_cents = COALESCE(
+      (SELECT line_total_cents FROM purchase_items WHERE id = inventory_lots.purchase_item_id),
+      CAST(ROUND(qty * cost * 100) AS INTEGER)
+    )
+    WHERE total_cost_cents IS NULL
   `).run();
   db.prepare(`
-    UPDATE sales
-    SET total_cost = COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0),
-        profit = total - COALESCE((SELECT SUM(line_cost) FROM sale_items WHERE sale_items.sale_id = sales.id), 0)
-    WHERE total_cost = 0
+    UPDATE inventory_lots
+    SET remaining_cost_cents = CASE WHEN status = 'cancelled' THEN 0 ELSE MAX(0,
+      total_cost_cents - COALESCE((
+        SELECT SUM(sale_item_lots.line_cost_cents)
+        FROM sale_item_lots
+        JOIN sale_items ON sale_items.id = sale_item_lots.sale_item_id
+        JOIN sales ON sales.id = sale_items.sale_id
+        WHERE sale_item_lots.lot_id = inventory_lots.id AND sales.status != 'cancelled'
+      ), 0)
+    ) END
+    WHERE remaining_cost_cents IS NULL
   `).run();
 
   if (db.prepare("SELECT COUNT(*) AS count FROM users").get().count === 0) seed();
@@ -190,11 +253,12 @@ function initDb() {
   if (db.prepare("SELECT COUNT(*) AS count FROM inventory_lots").get().count === 0) {
     const products = db.prepare("SELECT id, stock, cost FROM products WHERE stock > 0").all();
     const insertLot = db.prepare(`
-      INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, status)
-      VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, 'active')
+      INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, total_cost_cents, remaining_cost_cents, status)
+      VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'active')
     `);
     products.forEach((product) => {
-      insertLot.run(id("lot"), product.id, new Date().toISOString(), product.stock, product.stock, product.cost);
+      const costCents = roundedCents(product.stock * product.cost);
+      insertLot.run(id("lot"), product.id, new Date().toISOString(), product.stock, product.stock, product.cost, costCents, costCents);
     });
   }
 }
@@ -257,7 +321,7 @@ function saleRow(row) {
     userName: row.user_name,
     totalQty: row.total_qty,
     total: row.total,
-    totalCost: row.total_cost || 0,
+    totalCost: row.total_cost_cents == null ? row.total_cost || 0 : row.total_cost_cents / 100,
     profit: row.profit || 0,
     paymentType: row.payment_type,
     status: row.status || "active",
@@ -277,7 +341,7 @@ function purchaseRow(row) {
     cancelledAt: row.cancelled_at || null,
     cancelledBy: row.cancelled_by || null,
     totalQty: row.total_qty,
-    totalCost: row.total_cost,
+    totalCost: row.total_cost_cents == null ? row.total_cost : row.total_cost_cents / 100,
     items: []
   };
 }

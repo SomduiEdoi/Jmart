@@ -7,6 +7,7 @@ const bcrypt = require("bcryptjs");
 const ExcelJS = require("exceljs");
 const jwt = require("jsonwebtoken");
 const { db, id, initDb, userRow, productRow, saleRow, purchaseRow } = require("./db");
+const { parseMoneyCents, roundedCents, allocateCostCents } = require("./money");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -81,28 +82,39 @@ function sales() {
         price: item.price,
         qty: item.qty,
         cost: item.cost || 0,
-        lineCost: item.line_cost || 0,
-        profit: item.profit || item.qty * item.price - (item.line_cost || 0)
+        lineCost: item.line_cost_cents == null ? item.line_cost || 0 : item.line_cost_cents / 100,
+        profit: item.profit ?? item.qty * item.price - (item.line_cost_cents == null ? item.line_cost || 0 : item.line_cost_cents / 100)
       });
     }
   });
   return rows;
 }
 
-function consumeFifoLots(productId, qty) {
+function consumeFifoLots(productId, qty, lotState) {
   let remaining = qty;
-  const lots = db.prepare(`
-    SELECT * FROM inventory_lots
-    WHERE product_id = ? AND status = 'active' AND remaining_qty > 0
-    ORDER BY date, rowid
-  `).all(productId);
+  let lots = lotState.get(productId);
+  if (!lots) {
+    lots = db.prepare(`
+      SELECT * FROM inventory_lots
+      WHERE product_id = ? AND status = 'active' AND remaining_qty > 0
+      ORDER BY date, rowid
+    `).all(productId).map((lot) => ({
+      ...lot,
+      remainingCostCents: lot.remaining_cost_cents ?? roundedCents(lot.cost * lot.remaining_qty)
+    }));
+    lotState.set(productId, lots);
+  }
   const consumed = [];
-  lots.forEach((lot) => {
-    if (remaining <= 0) return;
+  for (const lot of lots) {
+    if (remaining <= 0) break;
     const takeQty = Math.min(remaining, lot.remaining_qty);
-    consumed.push({ lot, qty: takeQty, cost: lot.cost, lineCost: takeQty * lot.cost });
+    if (!takeQty) continue;
+    const lineCostCents = allocateCostCents(lot.remainingCostCents, lot.remaining_qty, takeQty);
+    consumed.push({ lot, qty: takeQty, cost: lineCostCents / 100 / takeQty, lineCost: lineCostCents / 100, lineCostCents });
+    lot.remaining_qty -= takeQty;
+    lot.remainingCostCents -= lineCostCents;
     remaining -= takeQty;
-  });
+  }
   if (remaining > 0) throw new Error("Not enough FIFO stock cost layers for this sale.");
   return consumed;
 }
@@ -119,7 +131,7 @@ function purchases() {
         unit: item.unit,
         cost: item.cost,
         qty: item.qty,
-        lineTotal: item.line_total ?? item.qty * item.cost
+        lineTotal: item.line_total_cents == null ? item.line_total ?? item.qty * item.cost : item.line_total_cents / 100
       });
     }
   });
@@ -306,7 +318,7 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
       ]
       : [
         ["Document No", 20], ["Date", 14], ["Details", 28], ["Status", 14],
-        ["Product", 36], ["Unit", 14], ["Qty", 12], ["Unit Cost", 16],
+        ["Product", 36], ["Unit", 14], ["Qty", 12], ["Unit Cost (avg.)", 18],
         ["Line Total", 18], ["Document Total", 18]
       ];
     const workbook = new ExcelJS.Workbook();
@@ -320,6 +332,7 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
     for (let column = 8; column <= columns.length; column += 1) {
       sheet.getColumn(column).numFmt = "#,##0.00";
     }
+    if (!isSales) sheet.getColumn(8).numFmt = "#,##0.000000";
 
     documentIds.forEach((documentId) => {
       const document = documentsById.get(documentId);
@@ -501,32 +514,39 @@ app.post("/api/purchases", requireAuth, requireAdmin, (req, res) => {
       const prepared = items.map((item) => {
         const product = db.prepare("SELECT * FROM products WHERE id = ?").get(item.productId);
         if (!product) throw new Error("Product not found.");
-        const qty = Math.floor(assertNumber(item.qty, "Quantity", 1));
-        const cost = assertNumber(item.cost, "Unit cost", 0);
-        return { product, qty, cost, lineTotal: qty * cost };
+        const qty = assertNumber(item.qty, "Quantity", 1);
+        if (!Number.isSafeInteger(qty)) throw new Error("Quantity must be a whole number.");
+        const lineTotalCents = item.lineTotal == null
+          ? roundedCents(qty * assertNumber(item.cost, "Unit cost", 0))
+          : parseMoneyCents(item.lineTotal, "Line total");
+        const lineTotal = lineTotalCents / 100;
+        return { product, qty, cost: lineTotal / qty, lineTotal, lineTotalCents };
       });
       const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
-      const totalCost = prepared.reduce((sum, item) => sum + item.lineTotal, 0);
+      const totalCostCents = prepared.reduce((sum, item) => sum + item.lineTotalCents, 0);
+      if (!Number.isSafeInteger(totalCostCents)) throw new Error("Purchase total is too large.");
+      const totalCost = totalCostCents / 100;
       const purchaseId = id("po");
       const purchaseDate = date.toISOString();
-      db.prepare("INSERT INTO purchases (id, doc_no, date, details, total_qty, total_cost) VALUES (?, ?, ?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO purchases (id, doc_no, date, details, total_qty, total_cost, total_cost_cents) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
         purchaseId,
         docNo,
         purchaseDate,
         details,
         totalQty,
-        totalCost
+        totalCost,
+        totalCostCents
       );
-      const insertItem = db.prepare("INSERT INTO purchase_items (id, purchase_id, product_id, name, qty, unit, cost, line_total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertItem = db.prepare("INSERT INTO purchase_items (id, purchase_id, product_id, name, qty, unit, cost, line_total, line_total_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
       const insertLot = db.prepare(`
-        INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+        INSERT INTO inventory_lots (id, purchase_item_id, purchase_id, product_id, date, qty, remaining_qty, cost, total_cost_cents, remaining_cost_cents, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `);
       const addStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
       prepared.forEach((item) => {
         const purchaseItemId = id("poi");
-        insertItem.run(purchaseItemId, purchaseId, item.product.id, item.product.name, item.qty, item.product.unit, item.cost, item.lineTotal);
-        insertLot.run(id("lot"), purchaseItemId, purchaseId, item.product.id, purchaseDate, item.qty, item.qty, item.cost);
+        insertItem.run(purchaseItemId, purchaseId, item.product.id, item.product.name, item.qty, item.product.unit, item.cost, item.lineTotal, item.lineTotalCents);
+        insertLot.run(id("lot"), purchaseItemId, purchaseId, item.product.id, purchaseDate, item.qty, item.qty, item.cost, item.lineTotalCents, item.lineTotalCents);
         addStock.run(item.qty, item.product.id);
       });
       return { id: purchaseId, docNo, date: purchaseDate, details, totalQty, totalCost };
@@ -561,7 +581,7 @@ app.post("/api/purchases/:id/cancel", requireAuth, requireAdmin, (req, res) => {
       items.forEach((item) => {
         removeStock.run(item.qty, item.product_id);
       });
-      db.prepare("UPDATE inventory_lots SET remaining_qty = 0, status = 'cancelled' WHERE purchase_id = ?").run(purchaseId);
+      db.prepare("UPDATE inventory_lots SET remaining_qty = 0, remaining_cost_cents = 0, status = 'cancelled' WHERE purchase_id = ?").run(purchaseId);
 
       db.prepare("UPDATE purchases SET status = 'cancelled', cancelled_at = ?, cancelled_by = ? WHERE id = ?").run(
         new Date().toISOString(),
@@ -586,33 +606,38 @@ app.post("/api/sales", requireAuth, (req, res) => {
       const prepared = items.map((item) => {
         const product = db.prepare("SELECT * FROM products WHERE id = ?").get(item.productId);
         if (!product) throw new Error("Product not found.");
-        const qty = Math.floor(assertNumber(item.qty, "Quantity", 1));
+        const qty = assertNumber(item.qty, "Quantity", 1);
+        if (!Number.isSafeInteger(qty)) throw new Error("Quantity must be a whole number.");
         if (qty > product.stock) throw new Error(`Not enough stock for ${product.name}.`);
         return { product, qty };
       });
       const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
       const total = prepared.reduce((sum, item) => sum + item.qty * item.product.price, 0);
+      const lotState = new Map();
       const preparedWithCost = prepared.map((item) => {
-        const lots = consumeFifoLots(item.product.id, item.qty);
-        const lineCost = lots.reduce((sum, lot) => sum + lot.lineCost, 0);
-        return { ...item, lots, lineCost, cost: lineCost / item.qty, profit: item.qty * item.product.price - lineCost };
+        const lots = consumeFifoLots(item.product.id, item.qty, lotState);
+        const lineCostCents = lots.reduce((sum, lot) => sum + lot.lineCostCents, 0);
+        const lineCost = lineCostCents / 100;
+        return { ...item, lots, lineCost, lineCostCents, cost: lineCost / item.qty, profit: Math.round((item.qty * item.product.price - lineCost) * 100) / 100 };
       });
-      const totalCost = preparedWithCost.reduce((sum, item) => sum + item.lineCost, 0);
-      const profit = total - totalCost;
+      const totalCostCents = preparedWithCost.reduce((sum, item) => sum + item.lineCostCents, 0);
+      if (!Number.isSafeInteger(totalCostCents)) throw new Error("Sale cost is too large.");
+      const totalCost = totalCostCents / 100;
+      const profit = Math.round((total - totalCost) * 100) / 100;
       const saleId = id("so");
       const docNo = nextDocumentNumber("SO");
       const date = new Date().toISOString();
-      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cost, profit, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total, totalCost, profit);
-      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, cost, line_cost, profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-      const insertSaleLot = db.prepare("INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost) VALUES (?, ?, ?, ?, ?, ?)");
-      const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ? WHERE id = ?");
+      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cost, total_cost_cents, profit, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total, totalCost, totalCostCents, profit);
+      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, cost, line_cost, line_cost_cents, profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertSaleLot = db.prepare("INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost, line_cost_cents) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ?, remaining_cost_cents = remaining_cost_cents - ? WHERE id = ?");
       const removeStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
       preparedWithCost.forEach((item) => {
         const saleItemId = id("soi");
-        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty, item.cost, item.lineCost, item.profit);
+        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty, item.cost, item.lineCost, item.lineCostCents, item.profit);
         item.lots.forEach((consumed) => {
-          insertSaleLot.run(id("sil"), saleItemId, consumed.lot.id, consumed.qty, consumed.cost, consumed.lineCost);
-          updateLot.run(consumed.qty, consumed.lot.id);
+          insertSaleLot.run(id("sil"), saleItemId, consumed.lot.id, consumed.qty, consumed.cost, consumed.lineCost, consumed.lineCostCents);
+          updateLot.run(consumed.qty, consumed.lineCostCents, consumed.lot.id);
         });
         removeStock.run(item.qty, item.product.id);
       });
@@ -639,10 +664,10 @@ app.post("/api/sales/:id/cancel", requireAuth, requireAdmin, (req, res) => {
 
       const items = db.prepare("SELECT * FROM sale_items WHERE sale_id = ? ORDER BY rowid").all(saleId);
       const restoreStock = db.prepare("UPDATE products SET stock = stock + ? WHERE id = ?");
-      const restoreLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty + ? WHERE id = ?");
+      const restoreLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty + ?, remaining_cost_cents = remaining_cost_cents + ? WHERE id = ?");
       items.forEach((item) => {
         const lots = db.prepare("SELECT * FROM sale_item_lots WHERE sale_item_id = ?").all(item.id);
-        lots.forEach((lot) => restoreLot.run(lot.qty, lot.lot_id));
+        lots.forEach((lot) => restoreLot.run(lot.qty, lot.line_cost_cents ?? roundedCents(lot.line_cost), lot.lot_id));
         restoreStock.run(item.qty, item.product_id);
       });
 
