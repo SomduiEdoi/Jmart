@@ -1364,7 +1364,7 @@ function renderPos() {
     <section>
       <div class="section-head">
         <div><h2>${expired ? "Expired Stock" : "POS"}</h2><p>${expired ? "Select expired products and save the quantities to remove from stock." : "Select products and save each checkout as credit for later settlement."}</p></div>
-        ${expired ? `<div class="metric" style="min-width:250px"><span>Member sales</span><strong>${state.memberSalesOpen ? "Open" : "Closed"}</strong><button class="btn ${state.memberSalesOpen ? "danger" : "primary"}" data-action="toggle-member-sales" style="margin-top:10px">${state.memberSalesOpen ? "Close member sales" : "Open member sales"}</button></div>` : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
+        ${expired ? "" : `<div class="metric" style="min-width:220px"><span>Outstanding</span><strong>${baht.format(state.currentUser.balance || 0)}</strong></div>`}
       </div>
       ${memberClosed ? `<div class="panel" role="status" style="margin-bottom:16px">Member sales are temporarily closed for the cutoff. You can view your history, but cannot save a new sale until Admin reopens them.</div>` : ""}
       <div class="pos-grid">
@@ -1377,11 +1377,17 @@ function renderPos() {
           <h3>Products</h3>
           <div class="product-grid" style="margin-top:12px">${regular.map((product) => productCard(product, selling, expired)).join("") || `<div class="empty">No available products</div>`}</div>
         </div>
-        <aside class="panel cart">
+        <aside class="pos-sidebar">
+          ${expired ? `<div class="panel member-sales-card">
+            <div class="member-sales-heading"><h3>Member sales</h3><span class="member-sales-status ${state.memberSalesOpen ? "is-open" : "is-closed"}">${state.memberSalesOpen ? "Open" : "Closed"}</span></div>
+            <div class="member-sales-control"><span>Accept new sales</span><button type="button" class="sales-toggle ${state.memberSalesOpen ? "is-on" : ""}" data-action="toggle-member-sales" role="switch" aria-checked="${state.memberSalesOpen}" aria-label="Accept new member sales"><span class="sales-toggle-thumb"></span></button></div>
+          </div>` : ""}
+          <div class="panel cart">
           <h3>${expired ? "Expired Items" : "Sales Bill"}</h3>
           <div class="cart-items">${cart.map((item) => cartRow(item, expired)).join("") || `<div class="empty">Select products from the left</div>`}</div>
           ${expired ? `<div class="cart-total"><span>Quantity to remove</span><strong>${number.format(cart.reduce((sum, item) => sum + item.qty, 0))}</strong></div><p style="color:var(--muted)">FIFO cost and loss are calculated when saved.</p>` : `<div class="cart-total"><span>Total</span><strong>${baht.format(cartTotal())}</strong></div>`}
           <button class="btn primary" style="width:100%;margin-top:14px" data-action="checkout" ${cart.length && !memberClosed ? "" : "disabled"}>${expired ? "Save Expired Stock" : "Save as Credit"}</button>
+          </div>
         </aside>
       </div>
     </section>`;

@@ -621,9 +621,82 @@ tr:last-child td {
   background: var(--brand);
 }
 
-.cart {
+.pos-sidebar {
   position: sticky;
   top: 116px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.member-sales-heading,
+.member-sales-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.member-sales-heading h3 {
+  font-size: 18px;
+}
+
+.member-sales-status {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.member-sales-status.is-open {
+  background: #e5f5ee;
+  color: var(--success);
+}
+
+.member-sales-status.is-closed {
+  background: #fee8e8;
+  color: var(--danger);
+}
+
+.member-sales-control {
+  margin-top: 18px;
+  min-height: 36px;
+  font-weight: 600;
+}
+
+.sales-toggle {
+  position: relative;
+  flex: 0 0 56px;
+  width: 56px;
+  height: 32px;
+  border-radius: 999px;
+  background: #b9c2cf;
+  transition: background 0.2s ease;
+}
+
+.sales-toggle.is-on {
+  background: var(--brand);
+}
+
+.sales-toggle-thumb {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.sales-toggle.is-on .sales-toggle-thumb {
+  transform: translateX(24px);
+}
+
+.sales-toggle:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .cart-items {
@@ -841,7 +914,7 @@ td.inline-actions .icon-action:first-child {
     padding: 32px;
   }
 
-  .cart {
+  .pos-sidebar {
     position: static;
   }
 
