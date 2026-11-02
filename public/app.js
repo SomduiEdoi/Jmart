@@ -231,15 +231,15 @@ function renderApp() {
           <div class="brand-mark">
             <div><strong>J-Mart</strong><span>Employee Welfare POS</span></div>
           </div>
+          <nav class="tabs">
+            ${tabs.map((tab) => `<button class="tab ${ui.activeTab === tab.id ? "active" : ""}" data-tab="${tab.id}">${tab.label}</button>`).join("")}
+          </nav>
           <div class="user-actions">
             <div class="user-chip"><strong>${escapeHtml(state.currentUser.name)}</strong><span>${isAdmin() ? "Admin" : `Outstanding ${baht.format(state.currentUser.balance || 0)}`}</span></div>
             <button class="btn" data-action="account">Account</button>
             <button class="btn" data-action="logout">Logout</button>
           </div>
         </div>
-        <nav class="tabs">
-          ${tabs.map((tab) => `<button class="tab ${ui.activeTab === tab.id ? "active" : ""}" data-tab="${tab.id}">${tab.label}</button>`).join("")}
-        </nav>
       </header>
       <main class="main">${renderTab()}</main>
     </div>
