@@ -313,7 +313,7 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
       ? [
         ["Document No", 20], ["Date", 14], ["Member", 24], ["Status", 14],
         ["Product", 36], ["Unit", 14], ["Qty", 12], ["Unit Price", 16],
-        ["Line Amount", 18], ["Unit Cost", 16], ["Line Cost", 18], ["Profit", 18]
+        ["Line Amount", 18], ["Unit Cost (avg.)", 18], ["Line Cost", 18], ["Profit", 18]
       ]
       : [
         ["Document No", 20], ["Date", 14], ["Details", 28], ["Status", 14],
@@ -331,7 +331,7 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
     for (let column = 8; column <= columns.length; column += 1) {
       sheet.getColumn(column).numFmt = "#,##0.00";
     }
-    if (!isSales) sheet.getColumn(8).numFmt = "#,##0.000000";
+    sheet.getColumn(isSales ? 10 : 8).numFmt = "#,##0.000000";
 
     documentIds.forEach((documentId) => {
       const document = documentsById.get(documentId);
@@ -517,8 +517,9 @@ app.post("/api/purchases", requireAuth, requireAdmin, (req, res) => {
         const qty = assertNumber(item.qty, "Quantity", 1);
         if (!Number.isSafeInteger(qty)) throw new Error("Quantity must be a whole number.");
         const lineTotalCents = item.lineTotal == null
-          ? roundedCents(qty * assertNumber(item.cost, "Unit cost", 0))
+          ? qty * parseMoneyCents(item.cost, "Unit cost")
           : parseMoneyCents(item.lineTotal, "Line total");
+        if (!Number.isSafeInteger(lineTotalCents)) throw new Error("Line total is too large.");
         const lineTotal = lineTotalCents / 100;
         return { product, qty, cost: lineTotal / qty, lineTotal, lineTotalCents };
       });
