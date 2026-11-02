@@ -32,7 +32,7 @@
   --icon-warning-text: #8a5611;
   --bg-dark: var(--slate-dark);
   --btn-default-bg: color-mix(in srgb, var(--slate) 12%, var(--white));
-  --tab-active-bg: var(--white);
+  --tab-active-bg: var(--bg);
   --image-bg: color-mix(in srgb, var(--slate) 10%, var(--white));
   --icon-hover-bg: color-mix(in srgb, var(--slate) 20%, var(--white));
   --toggle-off-bg: color-mix(in srgb, var(--slate) 45%, var(--white));
@@ -156,7 +156,7 @@ button {
   z-index: 10;
   background: var(--topbar-bg);
   backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 0;
 }
 
 .topbar-inner {
