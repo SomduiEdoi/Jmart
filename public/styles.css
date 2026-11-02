@@ -855,6 +855,14 @@ tr:last-child td {
   min-width: 1100px;
 }
 
+.purchase-modal tbody td {
+  vertical-align: top;
+}
+
+.purchase-modal td[data-purchase-unit-cost] {
+  line-height: 42px;
+}
+
 .purchase-modal th:first-child,
 .purchase-modal td:first-child {
   min-width: 520px;
