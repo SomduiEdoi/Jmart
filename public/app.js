@@ -229,7 +229,6 @@ function renderApp() {
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand-mark">
-            <div class="logo">J</div>
             <div><strong>J-Mart</strong><span>Employee Welfare POS</span></div>
           </div>
           <div class="user-actions">
@@ -336,7 +335,7 @@ function renderProducts() {
       <div class="section-head">
         <div><h2>Products</h2><p>Create the product master list, mark favourites, and monitor low stock.</p></div>
         <div class="inline-actions">
-          <button class="btn" data-action="export-products" type="button">Export Excel</button>
+          <button class="btn export" data-action="export-products" type="button">Export Excel</button>
           <button class="btn primary" data-action="add-product">Add Product</button>
         </div>
       </div>
@@ -778,7 +777,7 @@ function renderPurchases() {
         <div><h2>Purchases</h2><p>Create purchase documents with item details and update stock immediately after save.</p></div>
         <button class="btn primary" data-action="add-purchase">Create Purchase</button>
       </div>
-      <div class="summary-grid">
+      <div class="summary-grid purchase-summary-grid">
         <div class="metric"><span>Documents</span><strong>${number.format(state.purchases.length)}</strong></div>
         <div class="metric"><span>Active documents</span><strong>${number.format(activePurchases.length)}</strong></div>
         <div class="metric"><span>Total purchase amount</span><strong>${baht.format(totalCost)}</strong></div>
@@ -893,7 +892,7 @@ function reportShell(title, rows, daily, members, isSales) {
           <label class="field report-field">Month<input id="reportMonth" type="month" value="${ui.reportMonth}" /></label>
           <label class="field report-field">Start date<input id="exportStart" type="date" value="${ui.exportStart}" /></label>
           <label class="field report-field">End date<input id="exportEnd" type="date" value="${ui.exportEnd}" /></label>
-          <button class="btn primary report-export-btn" id="exportReport" type="button">Export to Excel</button>
+          <button class="btn export report-export-btn" id="exportReport" type="button">Export to Excel</button>
         </div>
       </div>
       <div class="summary-grid report-summary-grid">

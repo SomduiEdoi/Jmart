@@ -32,7 +32,7 @@
   --icon-warning-text: #8a5611;
   --bg-dark: var(--slate-dark);
   --btn-default-bg: color-mix(in srgb, var(--slate) 12%, var(--white));
-  --tab-active-bg: var(--brand);
+  --tab-active-bg: var(--white);
   --image-bg: color-mix(in srgb, var(--slate) 10%, var(--white));
   --icon-hover-bg: color-mix(in srgb, var(--slate) 20%, var(--white));
   --toggle-off-bg: color-mix(in srgb, var(--slate) 45%, var(--white));
@@ -177,19 +177,7 @@ button {
 .brand-mark {
   display: flex;
   align-items: center;
-  gap: 12px;
   min-width: 180px;
-}
-
-.logo {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  color: var(--white);
-  font-weight: 800;
-  background: var(--brand);
 }
 
 .brand-mark strong {
@@ -208,22 +196,22 @@ button {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  padding: 0 24px 12px;
+  padding: 0 24px;
 }
 
 .tab {
   white-space: nowrap;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 10px 10px 0 0;
   background: transparent;
   color: var(--off-white);
 }
 
 .tab.active {
   background: var(--tab-active-bg);
-  color: var(--white);
+  color: var(--slate-dark);
   font-weight: 700;
-  box-shadow: inset 0 -3px 0 var(--cyan);
+  box-shadow: none;
 }
 
 .tab:hover:not(.active) {
@@ -427,6 +415,15 @@ textarea {
   background: var(--brand-hover);
 }
 
+.btn.export {
+  background: var(--teal-ocean);
+  color: var(--white);
+}
+
+.btn.export:hover {
+  background: var(--brand);
+}
+
 .btn.danger {
   background: var(--danger-bg);
   color: var(--danger);
@@ -562,6 +559,10 @@ tr:last-child td {
 .summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 16px;
+}
+
+.purchase-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .report-summary-grid {
