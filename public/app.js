@@ -694,7 +694,21 @@ function openPurchaseModal() {
           </tr>`
       )
       .join("");
-    body.querySelectorAll("[data-purchase-field]").forEach((element) =>
+    body.querySelectorAll("[data-purchase-field]").forEach((element) => {
+      if (element.dataset.purchaseField === "productSearch") {
+        element.addEventListener("click", () => {
+          const index = Number(element.dataset.index);
+          const selected = state.products.find((product) => product.id === draft.items[index].productId);
+          if (!selected || element.value !== productLabel(selected)) return;
+          element.value = "";
+          try { element.showPicker?.(); } catch { /* The field still accepts typed search. */ }
+        });
+        element.addEventListener("blur", () => {
+          const index = Number(element.dataset.index);
+          const selected = state.products.find((product) => product.id === draft.items[index].productId);
+          if (selected && !element.value.trim()) element.value = productLabel(selected);
+        });
+      }
       element.addEventListener("input", (event) => {
         const index = Number(event.target.dataset.index);
         const field = event.target.dataset.purchaseField;
@@ -707,8 +721,8 @@ function openPurchaseModal() {
           updatePurchaseRow(index);
         }
         syncSummary();
-      })
-    );
+      });
+    });
 
     body.querySelectorAll("[data-purchase-remove]").forEach((button) =>
       button.addEventListener("click", () => {
