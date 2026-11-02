@@ -55,7 +55,7 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     const memberToken = (await request("/api/login", "POST", { role: "member", userId: "u-001", password: "1111" })).token;
     const product = await request("/api/products", "POST", {
       code: "COST-TEST", name: "Cost test", categoryId: "cat-snack", image: "https://example.com/test.png", unit: "piece",
-      cost: 0, price: 5, stock: 0, minStock: 0, favourite: false
+      cost: 0, price: 5.01, stock: 0, minStock: 0, favourite: false
     }, adminToken);
 
     const purchase = await request("/api/purchases", "POST", {
@@ -72,6 +72,12 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
       sales.push(await request("/api/sales", "POST", { items: [{ productId: product.id, qty: 1 }] }, memberToken));
     }
     assert.deepEqual(sales.map((sale) => Math.round(sale.totalCost * 100)), [333, 333, 334]);
+    assert.deepEqual(sales.map((sale) => sale.total), [5.01, 5.01, 5.01]);
+    assert.deepEqual(sales.map((sale) => sale.profit), [1.68, 1.68, 1.67]);
+    assert.equal(sales.reduce((cents, sale) => cents + Math.round(sale.profit * 100), 0), 503);
+    assert.deepEqual(db.prepare("SELECT total_cents, total_cost_cents, profit_cents FROM sales WHERE id = ?").get(sales[2].id), {
+      total_cents: 501, total_cost_cents: 334, profit_cents: 167
+    });
     let lot = db.prepare("SELECT * FROM inventory_lots WHERE purchase_id = ?").get(purchase.id);
     assert.equal(lot.remaining_qty, 0);
     assert.equal(lot.remaining_cost_cents, 0);
@@ -93,6 +99,26 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     lot = db.prepare("SELECT * FROM inventory_lots WHERE purchase_id = ?").get(purchase.id);
     assert.equal(lot.status, "cancelled");
     assert.equal(lot.remaining_cost_cents, 0);
+
+    const olderPurchase = await request("/api/purchases", "POST", {
+      docNo: "COST-TEST-OLDER", date: "2026-11-02", items: [{ productId: product.id, qty: 2, lineTotal: "8.00" }]
+    }, adminToken);
+    const newerPurchase = await request("/api/purchases", "POST", {
+      docNo: "COST-TEST-NEWER", date: "2026-11-02", items: [{ productId: product.id, qty: 3, lineTotal: "10.00" }]
+    }, adminToken);
+    const crossLotSale = await request("/api/sales", "POST", { items: [{ productId: product.id, qty: 3 }] }, memberToken);
+    const finalSale = await request("/api/sales", "POST", { items: [{ productId: product.id, qty: 2 }] }, memberToken);
+    assert.deepEqual([crossLotSale.total, crossLotSale.totalCost, crossLotSale.profit], [15.03, 11.33, 3.7]);
+    assert.deepEqual([finalSale.total, finalSale.totalCost, finalSale.profit], [10.02, 6.67, 3.35]);
+    assert.deepEqual(db.prepare("SELECT line_revenue_cents, line_cost_cents, profit_cents FROM sale_items WHERE sale_id = ?").get(crossLotSale.id), {
+      line_revenue_cents: 1503, line_cost_cents: 1133, profit_cents: 370
+    });
+    assert.equal(Math.round((crossLotSale.profit + finalSale.profit) * 100), 705);
+    assert.equal(db.prepare("SELECT remaining_cost_cents FROM inventory_lots WHERE purchase_id = ?").get(olderPurchase.id).remaining_cost_cents, 0);
+    assert.equal(db.prepare("SELECT remaining_cost_cents FROM inventory_lots WHERE purchase_id = ?").get(newerPurchase.id).remaining_cost_cents, 0);
+    const reportSales = (await request("/api/bootstrap", "GET", undefined, adminToken)).sales;
+    assert.equal(reportSales.find((sale) => sale.id === crossLotSale.id).profit, 3.7);
+    assert.equal(reportSales.find((sale) => sale.id === finalSale.id).profit, 3.35);
   } finally {
     db?.close();
     if (child.exitCode == null && child.signalCode == null) {

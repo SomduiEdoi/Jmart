@@ -38,6 +38,13 @@ Data is stored in:
 ./data/jmart.sqlite
 ```
 
+## Purchase Cost and Sales Profit
+
+- A purchase item records the entered line total in whole satang. Its displayed unit cost is the average (`line total / quantity`), which may have more than two decimal places.
+- Sales consume inventory lots in FIFO order. Any remaining satang is assigned to the last units sold from that lot, so the lot's allocated costs add up to its original purchase amount.
+- The sale price remains the value configured in Products. Saving a purchase does not change it. A sale's gross profit is its sale amount minus the FIFO cost of the units actually sold.
+- Stock already on hand is sold from its older lots before a new purchase lot. Existing sales keep their recorded prices, costs, and profits.
+
 ## Production Install
 
 See [docs/UBUNTU_22_04_INSTALL.md](docs/UBUNTU_22_04_INSTALL.md).

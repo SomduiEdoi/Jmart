@@ -33,6 +33,18 @@ const averageUnitCost = new Intl.NumberFormat("th-TH", { style: "currency", curr
 const number = new Intl.NumberFormat("th-TH");
 const PRODUCT_PAGE_SIZE = 50;
 
+function moneyCents(value) {
+  return Math.round(Number(value || 0) * 100);
+}
+
+function sumMoney(rows, select) {
+  return rows.reduce((cents, row) => cents + moneyCents(select(row)), 0) / 100;
+}
+
+function saleProfit(sale) {
+  return sale.profit ?? sale.total - (sale.totalCost || 0);
+}
+
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
@@ -260,10 +272,10 @@ function renderDashboard() {
   const sales = activeDocuments(byMonth(state.sales, ui.reportMonth));
   const purchases = activeDocuments(byMonth(state.purchases, ui.reportMonth));
   const daily = summarizeSalesByDate(sales);
-  const salesAmount = sales.reduce((sum, sale) => sum + sale.total, 0);
-  const salesCost = sales.reduce((sum, sale) => sum + (sale.totalCost || 0), 0);
-  const profit = sales.reduce((sum, sale) => sum + (sale.profit || sale.total - (sale.totalCost || 0)), 0);
-  const purchaseAmount = purchases.reduce((sum, purchase) => sum + purchase.totalCost, 0);
+  const salesAmount = sumMoney(sales, (sale) => sale.total);
+  const salesCost = sumMoney(sales, (sale) => sale.totalCost);
+  const profit = sumMoney(sales, saleProfit);
+  const purchaseAmount = sumMoney(purchases, (purchase) => purchase.totalCost);
   return `
     <section>
       <div class="section-head">
@@ -731,7 +743,7 @@ function openPurchaseModal() {
 
 function renderPurchases() {
   const activePurchases = state.purchases.filter((purchase) => purchase.status !== "cancelled");
-  const totalCost = activePurchases.reduce((sum, purchase) => sum + purchase.totalCost, 0);
+  const totalCost = sumMoney(activePurchases, (purchase) => purchase.totalCost);
   return `
     <section>
       <div class="section-head">
@@ -842,8 +854,8 @@ function renderPurchaseReport() {
 function reportShell(title, rows, daily, members, isSales) {
   const countableRows = activeDocuments(rows);
   const transactionRows = sortReportTransactions(filterReportTransactions(rows, isSales), isSales);
-  const amount = countableRows.reduce((sum, item) => sum + (isSales ? item.total : item.totalCost), 0);
-  const profit = isSales ? countableRows.reduce((sum, item) => sum + (item.profit || item.total - (item.totalCost || 0)), 0) : 0;
+  const amount = sumMoney(countableRows, (item) => isSales ? item.total : item.totalCost);
+  const profit = isSales ? sumMoney(countableRows, saleProfit) : 0;
   const transactionTitle = isSales ? "Sale Transection" : "Purchases Transection";
   return `
     <section>
@@ -969,7 +981,7 @@ function reportRow(item, isSales) {
   if (!isSales) {
     return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.details || "-")}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.totalCost)}</td><td>${purchaseStatusBadge(item)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-purchase", item.id, "i", "View purchase")}${canCancel ? actionIcon("cancel-purchase", item.id, "×", "Cancel purchase", "danger") : ""}</td></tr>`;
   }
-  return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.userName)}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.total)}</td><td>${baht.format(item.totalCost || 0)}</td><td>${baht.format(item.profit || item.total - (item.totalCost || 0))}</td><td>${saleStatusBadge(item)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-sale", item.id, "i", "View sale")}${canCancel ? actionIcon("cancel-sale", item.id, "×", "Cancel sale", "danger") : ""}</td></tr>`;
+  return `<tr><td>${escapeHtml(item.docNo)}</td><td>${item.date.slice(0, 10)}</td><td>${escapeHtml(item.userName)}</td><td>${number.format(item.totalQty)}</td><td>${baht.format(item.total)}</td><td>${baht.format(item.totalCost || 0)}</td><td>${baht.format(saleProfit(item))}</td><td>${saleStatusBadge(item)}${cancelMeta}</td><td class="inline-actions action-cell">${actionIcon("view-sale", item.id, "i", "View sale")}${canCancel ? actionIcon("cancel-sale", item.id, "×", "Cancel sale", "danger") : ""}</td></tr>`;
 }
 
 function byMonth(list, month) {
@@ -980,34 +992,39 @@ function summarizeByDate(list, amountKey) {
   const map = {};
   list.forEach((item) => {
     const date = item.date.slice(0, 10);
-    if (!map[date]) map[date] = { date, qty: 0, amount: 0 };
+    if (!map[date]) map[date] = { date, qty: 0, amountCents: 0 };
     map[date].qty += item.totalQty;
-    map[date].amount += item[amountKey];
+    map[date].amountCents += moneyCents(item[amountKey]);
   });
-  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date))
+    .map(({ amountCents, ...row }) => ({ ...row, amount: amountCents / 100 }));
 }
 
 function summarizeSalesByDate(list) {
   const map = {};
   list.forEach((sale) => {
     const date = sale.date.slice(0, 10);
-    if (!map[date]) map[date] = { date, qty: 0, amount: 0, cost: 0, profit: 0 };
+    if (!map[date]) map[date] = { date, qty: 0, amountCents: 0, costCents: 0, profitCents: 0 };
     map[date].qty += sale.totalQty;
-    map[date].amount += sale.total;
-    map[date].cost += sale.totalCost || 0;
-    map[date].profit += sale.profit || sale.total - (sale.totalCost || 0);
+    map[date].amountCents += moneyCents(sale.total);
+    map[date].costCents += moneyCents(sale.totalCost);
+    map[date].profitCents += moneyCents(saleProfit(sale));
   });
-  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+  return Object.values(map).sort((a, b) => a.date.localeCompare(b.date))
+    .map(({ amountCents, costCents, profitCents, ...row }) => ({
+      ...row, amount: amountCents / 100, cost: costCents / 100, profit: profitCents / 100
+    }));
 }
 
 function summarizeByMember(list) {
   const map = {};
   list.forEach((sale) => {
-    if (!map[sale.userId]) map[sale.userId] = { name: sale.userName, qty: 0, amount: 0 };
+    if (!map[sale.userId]) map[sale.userId] = { name: sale.userName, qty: 0, amountCents: 0 };
     map[sale.userId].qty += sale.totalQty;
-    map[sale.userId].amount += sale.total;
+    map[sale.userId].amountCents += moneyCents(sale.total);
   });
-  return Object.values(map).sort((a, b) => b.amount - a.amount);
+  return Object.values(map).sort((a, b) => b.amountCents - a.amountCents)
+    .map(({ amountCents, ...row }) => ({ ...row, amount: amountCents / 100 }));
 }
 
 function bindReports() {
@@ -1136,7 +1153,7 @@ function openSaleDetails(id) {
       <div class="metric"><span>Member</span><strong>${escapeHtml(sale.userName)}</strong></div>
       <div class="metric"><span>Total Amount</span><strong>${baht.format(sale.total)}</strong></div>
       <div class="metric"><span>Cost</span><strong>${baht.format(sale.totalCost || 0)}</strong></div>
-      <div class="metric"><span>Profit</span><strong>${baht.format(sale.profit || sale.total - (sale.totalCost || 0))}</strong></div>
+      <div class="metric"><span>Profit</span><strong>${baht.format(saleProfit(sale))}</strong></div>
     </div>
     <div class="panel" style="margin-bottom:16px">
       <h3>Transaction</h3>
@@ -1149,7 +1166,7 @@ function openSaleDetails(id) {
         <table>
           <thead><tr><th>Product</th><th>Unit</th><th>Qty</th><th>Unit Price</th><th>Line Total</th><th>Cost</th><th>Profit</th></tr></thead>
           <tbody>
-            ${sale.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.price)}</td><td>${baht.format(item.qty * item.price)}</td><td>${baht.format(item.lineCost || 0)}</td><td>${baht.format(item.profit || item.qty * item.price - (item.lineCost || 0))}</td></tr>`).join("")}
+            ${sale.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.unit || "-")}</td><td>${number.format(item.qty)}</td><td>${baht.format(item.price)}</td><td>${baht.format(item.lineAmount ?? item.qty * item.price)}</td><td>${baht.format(item.lineCost || 0)}</td><td>${baht.format(item.profit ?? (item.lineAmount ?? item.qty * item.price) - (item.lineCost || 0))}</td></tr>`).join("")}
           </tbody>
         </table>
       </div>

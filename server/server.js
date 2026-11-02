@@ -81,9 +81,10 @@ function sales() {
         unit: item.unit,
         price: item.price,
         qty: item.qty,
+        lineAmount: item.line_revenue_cents == null ? item.qty * item.price : item.line_revenue_cents / 100,
         cost: item.cost || 0,
         lineCost: item.line_cost_cents == null ? item.line_cost || 0 : item.line_cost_cents / 100,
-        profit: item.profit ?? item.qty * item.price - (item.line_cost_cents == null ? item.line_cost || 0 : item.line_cost_cents / 100)
+        profit: item.profit_cents == null ? item.profit ?? item.qty * item.price - (item.line_cost_cents == null ? item.line_cost || 0 : item.line_cost_cents / 100) : item.profit_cents / 100
       });
     }
   });
@@ -338,12 +339,13 @@ app.post("/api/reports/export", requireAuth, requireAdmin, async (req, res) => {
       const document = documentsById.get(documentId);
       document.items.forEach((item) => {
         if (isSales) {
-          const lineAmount = item.qty * item.price;
+          const lineAmountCents = roundedCents(item.lineAmount ?? item.qty * item.price);
+          const lineAmount = lineAmountCents / 100;
           const lineCost = item.lineCost || 0;
           sheet.addRow([
             document.docNo, document.date.slice(0, 10), document.userName, document.status || "active",
             item.name, item.unit, item.qty, item.price, lineAmount, item.cost || 0,
-            lineCost, item.profit ?? lineAmount - lineCost
+            lineCost, item.profit ?? (lineAmountCents - roundedCents(lineCost)) / 100
           ]);
         } else {
           sheet.addRow([
@@ -422,7 +424,7 @@ function normalizeProduct(body, productId, stock, cost = null) {
     name: assertText(body.name, "Product name"),
     unit: assertText(body.unit, "Unit"),
     cost: cost === null ? assertNumber(body.cost, "Cost") : assertNumber(cost, "Cost"),
-    price: assertNumber(body.price, "Sale price"),
+    price: parseMoneyCents(body.price, "Sale price") / 100,
     stock: Math.floor(assertNumber(stock, "Stock")),
     minStock: Math.floor(assertNumber(body.minStock, "Minimum stock")),
     favourite: Boolean(body.favourite)
@@ -609,32 +611,38 @@ app.post("/api/sales", requireAuth, (req, res) => {
         const qty = assertNumber(item.qty, "Quantity", 1);
         if (!Number.isSafeInteger(qty)) throw new Error("Quantity must be a whole number.");
         if (qty > product.stock) throw new Error(`Not enough stock for ${product.name}.`);
-        return { product, qty };
+        const priceCents = parseMoneyCents(product.price, "Sale price");
+        const lineRevenueCents = qty * priceCents;
+        if (!Number.isSafeInteger(lineRevenueCents)) throw new Error("Sale amount is too large.");
+        return { product, qty, lineRevenueCents };
       });
       const totalQty = prepared.reduce((sum, item) => sum + item.qty, 0);
-      const total = prepared.reduce((sum, item) => sum + item.qty * item.product.price, 0);
+      const totalCents = prepared.reduce((sum, item) => sum + item.lineRevenueCents, 0);
+      if (!Number.isSafeInteger(totalCents)) throw new Error("Sale amount is too large.");
+      const total = totalCents / 100;
       const lotState = new Map();
       const preparedWithCost = prepared.map((item) => {
         const lots = consumeFifoLots(item.product.id, item.qty, lotState);
         const lineCostCents = lots.reduce((sum, lot) => sum + lot.lineCostCents, 0);
         const lineCost = lineCostCents / 100;
-        return { ...item, lots, lineCost, lineCostCents, cost: lineCost / item.qty, profit: Math.round((item.qty * item.product.price - lineCost) * 100) / 100 };
+        return { ...item, lots, lineCost, lineCostCents, cost: lineCost / item.qty, profit: (item.lineRevenueCents - lineCostCents) / 100 };
       });
       const totalCostCents = preparedWithCost.reduce((sum, item) => sum + item.lineCostCents, 0);
       if (!Number.isSafeInteger(totalCostCents)) throw new Error("Sale cost is too large.");
       const totalCost = totalCostCents / 100;
-      const profit = Math.round((total - totalCost) * 100) / 100;
+      const profitCents = totalCents - totalCostCents;
+      const profit = profitCents / 100;
       const saleId = id("so");
       const docNo = nextDocumentNumber("SO");
       const date = new Date().toISOString();
-      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cost, total_cost_cents, profit, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total, totalCost, totalCostCents, profit);
-      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, cost, line_cost, line_cost_cents, profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      db.prepare("INSERT INTO sales (id, doc_no, date, user_id, user_name, total_qty, total, total_cents, total_cost, total_cost_cents, profit, profit_cents, payment_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Credit')").run(saleId, docNo, date, req.user.id, req.user.name, totalQty, total, totalCents, totalCost, totalCostCents, profit, profitCents);
+      const insertItem = db.prepare("INSERT INTO sale_items (id, sale_id, product_id, name, unit, price, qty, line_revenue_cents, cost, line_cost, line_cost_cents, profit, profit_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       const insertSaleLot = db.prepare("INSERT INTO sale_item_lots (id, sale_item_id, lot_id, qty, cost, line_cost, line_cost_cents) VALUES (?, ?, ?, ?, ?, ?, ?)");
       const updateLot = db.prepare("UPDATE inventory_lots SET remaining_qty = remaining_qty - ?, remaining_cost_cents = remaining_cost_cents - ? WHERE id = ?");
       const removeStock = db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
       preparedWithCost.forEach((item) => {
         const saleItemId = id("soi");
-        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty, item.cost, item.lineCost, item.lineCostCents, item.profit);
+        insertItem.run(saleItemId, saleId, item.product.id, item.product.name, item.product.unit, item.product.price, item.qty, item.lineRevenueCents, item.cost, item.lineCost, item.lineCostCents, item.profit, item.lineRevenueCents - item.lineCostCents);
         item.lots.forEach((consumed) => {
           insertSaleLot.run(id("sil"), saleItemId, consumed.lot.id, consumed.qty, consumed.cost, consumed.lineCost, consumed.lineCostCents);
           updateLot.run(consumed.qty, consumed.lineCostCents, consumed.lot.id);

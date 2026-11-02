@@ -55,9 +55,11 @@ function initDb() {
       user_name TEXT NOT NULL,
       total_qty INTEGER NOT NULL,
       total REAL NOT NULL,
+      total_cents INTEGER,
       total_cost REAL NOT NULL DEFAULT 0,
       total_cost_cents INTEGER,
       profit REAL NOT NULL DEFAULT 0,
+      profit_cents INTEGER,
       payment_type TEXT NOT NULL DEFAULT 'Credit',
       status TEXT NOT NULL DEFAULT 'active',
       cancelled_at TEXT,
@@ -72,10 +74,12 @@ function initDb() {
       unit TEXT NOT NULL,
       price REAL NOT NULL,
       qty INTEGER NOT NULL,
+      line_revenue_cents INTEGER,
       cost REAL NOT NULL DEFAULT 0,
       line_cost REAL NOT NULL DEFAULT 0,
       line_cost_cents INTEGER,
-      profit REAL NOT NULL DEFAULT 0
+      profit REAL NOT NULL DEFAULT 0,
+      profit_cents INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS purchases (
@@ -148,6 +152,12 @@ function initDb() {
   if (!saleColumns.includes("total_cost_cents")) {
     db.prepare("ALTER TABLE sales ADD COLUMN total_cost_cents INTEGER").run();
   }
+  if (!saleColumns.includes("total_cents")) {
+    db.prepare("ALTER TABLE sales ADD COLUMN total_cents INTEGER").run();
+  }
+  if (!saleColumns.includes("profit_cents")) {
+    db.prepare("ALTER TABLE sales ADD COLUMN profit_cents INTEGER").run();
+  }
 
   const saleItemColumns = db.prepare("PRAGMA table_info(sale_items)").all().map((column) => column.name);
   const addedSaleLineCost = !saleItemColumns.includes("line_cost");
@@ -162,6 +172,12 @@ function initDb() {
   }
   if (!saleItemColumns.includes("line_cost_cents")) {
     db.prepare("ALTER TABLE sale_items ADD COLUMN line_cost_cents INTEGER").run();
+  }
+  if (!saleItemColumns.includes("line_revenue_cents")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN line_revenue_cents INTEGER").run();
+  }
+  if (!saleItemColumns.includes("profit_cents")) {
+    db.prepare("ALTER TABLE sale_items ADD COLUMN profit_cents INTEGER").run();
   }
 
   const purchaseColumns = db.prepare("PRAGMA table_info(purchases)").all().map((column) => column.name);
@@ -222,7 +238,11 @@ function initDb() {
   }
 
   db.prepare("UPDATE sale_items SET line_cost_cents = CAST(ROUND(line_cost * 100) AS INTEGER) WHERE line_cost_cents IS NULL").run();
+  db.prepare("UPDATE sale_items SET line_revenue_cents = CAST(ROUND(qty * price * 100) AS INTEGER) WHERE line_revenue_cents IS NULL").run();
+  db.prepare("UPDATE sale_items SET profit_cents = CAST(ROUND(profit * 100) AS INTEGER) WHERE profit_cents IS NULL").run();
+  db.prepare("UPDATE sales SET total_cents = CAST(ROUND(total * 100) AS INTEGER) WHERE total_cents IS NULL").run();
   db.prepare("UPDATE sales SET total_cost_cents = CAST(ROUND(total_cost * 100) AS INTEGER) WHERE total_cost_cents IS NULL").run();
+  db.prepare("UPDATE sales SET profit_cents = CAST(ROUND(profit * 100) AS INTEGER) WHERE profit_cents IS NULL").run();
   db.prepare("UPDATE purchase_items SET line_total_cents = CAST(ROUND(line_total * 100) AS INTEGER) WHERE line_total_cents IS NULL").run();
   db.prepare("UPDATE purchases SET total_cost_cents = CAST(ROUND(total_cost * 100) AS INTEGER) WHERE total_cost_cents IS NULL").run();
   db.prepare("UPDATE sale_item_lots SET line_cost_cents = CAST(ROUND(line_cost * 100) AS INTEGER) WHERE line_cost_cents IS NULL").run();
@@ -320,9 +340,9 @@ function saleRow(row) {
     userId: row.user_id,
     userName: row.user_name,
     totalQty: row.total_qty,
-    total: row.total,
+    total: row.total_cents == null ? row.total : row.total_cents / 100,
     totalCost: row.total_cost_cents == null ? row.total_cost || 0 : row.total_cost_cents / 100,
-    profit: row.profit || 0,
+    profit: row.profit_cents == null ? row.profit || 0 : row.profit_cents / 100,
     paymentType: row.payment_type,
     status: row.status || "active",
     cancelledAt: row.cancelled_at || null,
