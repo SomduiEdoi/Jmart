@@ -255,14 +255,13 @@ app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => 
       { header: "Category", key: "category", width: 22 },
       { header: "Product", key: "name", width: 36 },
       { header: "Unit", key: "unit", width: 14 },
-      { header: "Cost (THB)", key: "cost", width: 16, style: { numFmt: "#,##0.00" } },
       { header: "Price (THB)", key: "price", width: 16, style: { numFmt: "#,##0.00" } },
       { header: "Stock", key: "stock", width: 12 },
       { header: "Minimum Stock", key: "minStock", width: 18 },
       { header: "Status", key: "status", width: 16 }
     ];
     sheet.getRow(1).font = { bold: true };
-    sheet.autoFilter = "A1:I1";
+    sheet.autoFilter = "A1:H1";
 
     productIds.forEach((productId) => {
       const product = productsById.get(productId);
@@ -271,7 +270,6 @@ app.post("/api/products/export", requireAuth, requireAdmin, async (req, res) => 
         category: categoriesById.get(product.categoryId) || "-",
         name: product.name,
         unit: product.unit,
-        cost: product.cost,
         price: product.price,
         stock: product.stock,
         minStock: product.minStock,
@@ -423,7 +421,7 @@ function normalizeProduct(body, productId, stock, cost = null) {
     categoryId: assertText(body.categoryId, "Category"),
     name: assertText(body.name, "Product name"),
     unit: assertText(body.unit, "Unit"),
-    cost: cost === null ? assertNumber(body.cost, "Cost") : assertNumber(cost, "Cost"),
+    cost: cost === null ? 0 : assertNumber(cost, "Cost"),
     price: parseMoneyCents(body.price, "Sale price") / 100,
     stock: Math.floor(assertNumber(stock, "Stock")),
     minStock: Math.floor(assertNumber(body.minStock, "Minimum stock")),

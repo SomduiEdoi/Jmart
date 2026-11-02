@@ -330,8 +330,8 @@ function renderProducts() {
         </div>
         <div class="list">
           <table class="product-table">
-            <thead><tr><th>Image</th><th>Code</th><th>Category</th><th>Product</th><th>Unit</th><th>Cost</th><th>Price</th><th>Stock</th><th>Min</th><th>Status</th><th>Fav</th><th></th></tr></thead>
-            <tbody>${pageProducts.map(productRow).join("") || `<tr><td colspan="12"><div class="empty">No products found</div></td></tr>`}</tbody>
+            <thead><tr><th>Image</th><th>Code</th><th>Category</th><th>Product</th><th>Unit</th><th>Price</th><th>Stock</th><th>Min</th><th>Status</th><th>Fav</th><th></th></tr></thead>
+            <tbody>${pageProducts.map(productRow).join("") || `<tr><td colspan="11"><div class="empty">No products found</div></td></tr>`}</tbody>
           </table>
         </div>
         <div class="product-pagination">
@@ -355,7 +355,6 @@ function productRow(product) {
       <td>${escapeHtml(categoryName(product.categoryId))}</td>
       <td>${escapeHtml(product.name)}</td>
       <td>${escapeHtml(product.unit)}</td>
-      <td>${baht.format(product.cost)}</td>
       <td>${baht.format(product.price)}</td>
       <td>${number.format(product.stock)}</td>
       <td>${number.format(product.minStock)}</td>
@@ -457,7 +456,6 @@ function openProductModal(id) {
     categoryId: state.categories[0]?.id || "",
     name: "",
     unit: "piece",
-    cost: 0,
     price: 0,
     stock: 0,
     minStock: 0,
@@ -470,9 +468,8 @@ function openProductModal(id) {
       <label class="field">Category${categorySelect("modalCategory", product.categoryId)}</label>
       <label class="field">Product name<input name="name" value="${escapeHtml(product.name)}" required /></label>
       <label class="field">Unit<input name="unit" value="${escapeHtml(product.unit)}" required /></label>
-      ${isEditing ? `<label class="field">Cost<input value="${baht.format(product.cost)}" disabled /></label>` : `<label class="field">Cost<input name="cost" type="number" min="0" step="0.01" value="${product.cost}" /></label>`}
       <label class="field">Sale price<input name="price" type="number" min="0" step="0.01" value="${product.price}" /></label>
-      ${isEditing ? `<label class="field">Current stock<input value="${product.stock}" disabled /></label>` : `<label class="field">Initial stock<input name="stock" type="number" min="0" step="1" value="${product.stock}" /></label>`}
+      ${isEditing ? `<label class="field">Current stock<input value="${product.stock}" disabled /></label>` : `<p class="field full" style="margin:0;color:var(--muted)">Stock starts at 0. Create a purchase to receive inventory and record its cost.</p>`}
       <label class="field">Minimum stock<input name="minStock" type="number" min="0" step="1" value="${product.minStock}" /></label>
       <label class="field">Favourite<select name="favourite"><option value="false">No</option><option value="true" ${product.favourite ? "selected" : ""}>Yes</option></select></label>
       <label class="field full">Image URL<input name="image" value="${escapeHtml(product.image)}" placeholder="https://..." /></label>
@@ -494,9 +491,7 @@ function openProductModal(id) {
         categoryId: document.getElementById("modalCategory").value,
         name: form.get("name").trim(),
         unit: form.get("unit").trim(),
-        cost: id ? product.cost : Number(form.get("cost") || 0),
         price: Number(form.get("price") || 0),
-        stock: id ? product.stock : Number(form.get("stock") || 0),
         minStock: Number(form.get("minStock") || 0),
         favourite: form.get("favourite") === "true"
       };

@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const Database = require("better-sqlite3");
+const ExcelJS = require("exceljs");
 
 async function freePort() {
   const server = net.createServer();
@@ -55,8 +56,20 @@ test("purchase line total stays exact through FIFO sales and cancellation", asyn
     const memberToken = (await request("/api/login", "POST", { role: "member", userId: "u-001", password: "1111" })).token;
     const product = await request("/api/products", "POST", {
       code: "COST-TEST", name: "Cost test", categoryId: "cat-snack", image: "https://example.com/test.png", unit: "piece",
-      cost: 0, price: 5.01, stock: 0, minStock: 0, favourite: false
+      price: 5.01, minStock: 0, favourite: false
     }, adminToken);
+    assert.equal(product.stock, 0);
+    const exportResponse = await fetch(`${baseUrl}/api/products/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ productIds: [product.id] })
+    });
+    assert.equal(exportResponse.ok, true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(await exportResponse.arrayBuffer()));
+    assert.deepEqual(workbook.getWorksheet("Products").getRow(1).values.slice(1), [
+      "Code", "Category", "Product", "Unit", "Price (THB)", "Stock", "Minimum Stock", "Status"
+    ]);
 
     const purchase = await request("/api/purchases", "POST", {
       docNo: "COST-TEST-PO", date: "2026-11-02", items: [{ productId: product.id, qty: 3, lineTotal: "10.00" }]

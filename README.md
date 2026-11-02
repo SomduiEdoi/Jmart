@@ -41,6 +41,7 @@ Data is stored in:
 ## Purchase Cost and Sales Profit
 
 - A purchase item records the entered line total in whole satang. Its displayed unit cost is the average (`line total / quantity`), which may have more than two decimal places.
+- New products start with zero stock. Receive stock and record its cost through Purchases. The legacy `products.cost` database field remains for existing inventory history but is not shown or edited in Products.
 - Sales consume inventory lots in FIFO order. Any remaining satang is assigned to the last units sold from that lot, so the lot's allocated costs add up to its original purchase amount.
 - The sale price remains the value configured in Products. Saving a purchase does not change it. A sale's gross profit is its sale amount minus the FIFO cost of the units actually sold.
 - Stock already on hand is sold from its older lots before a new purchase lot. Existing sales keep their recorded prices, costs, and profits.
