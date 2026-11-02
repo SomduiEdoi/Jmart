@@ -1,17 +1,35 @@
 const TOKEN_KEY = "jmart-token";
+const today = new Date();
+const initialReportMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+
+function monthDateRange(month) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return { start: `${month}-01`, end: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function selectReportMonth(month) {
+  const range = monthDateRange(month);
+  if (!range) return;
+  ui.reportMonth = month;
+  ui.exportStart = range.start;
+  ui.exportEnd = range.end;
+  render();
+}
 
 const ui = {
   activeTab: "pos",
   posCategory: "all",
   productFilters: { search: "", category: "all", stock: "none", alert: "all" },
   productPage: 1,
-  reportMonth: new Date().toISOString().slice(0, 7),
+  reportMonth: initialReportMonth,
   reportMember: "all",
   reportStatus: "all",
   salesReportSort: "date_desc",
   purchaseReportSort: "date_desc",
-  exportStart: new Date().toISOString().slice(0, 7) + "-01",
-  exportEnd: new Date().toISOString().slice(0, 10)
+  exportStart: monthDateRange(initialReportMonth).start,
+  exportEnd: monthDateRange(initialReportMonth).end
 };
 
 const state = {
@@ -304,8 +322,7 @@ function renderDashboard() {
 
 function bindDashboard() {
   document.getElementById("dashboardMonth").addEventListener("change", (event) => {
-    ui.reportMonth = event.target.value;
-    render();
+    selectReportMonth(event.target.value);
   });
 }
 
@@ -1026,8 +1043,7 @@ function summarizeByMember(list) {
 
 function bindReports() {
   document.getElementById("reportMonth").addEventListener("change", (event) => {
-    ui.reportMonth = event.target.value;
-    render();
+    selectReportMonth(event.target.value);
   });
   document.getElementById("exportStart").addEventListener("change", (event) => {
     ui.exportStart = event.target.value;
